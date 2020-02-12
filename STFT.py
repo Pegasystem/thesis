@@ -8,8 +8,6 @@ from torch import nn
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
-FILENAME = "oneandonly.wav"
-
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 SEG_LENGTH = 1024       # amount of samples in a single segment
 
@@ -59,9 +57,12 @@ def merge_stereo(left_channel, right_channel):
 def zero_pad(signal, modulo):
     # Pads a given signal so that it is divisible by the given modulo so that the input of the NN is the same dimension.
     # Returns the signal with the appropriate amount of zeros appended.
-    while len(signal) % modulo != 0:
-        signal.append(0)
-    return signal
+    n, remainder = divmod(len(signal), modulo)
+    n += bool(remainder)
+    new_signal = numpy.zeros(n * modulo)
+    new_signal[:len(signal)] = signal
+
+    return new_signal
 
 
 def to_amplitude(stft_in):
@@ -110,11 +111,89 @@ def to_signal(amplitudes, phases):
     return numpy.array(signal)
 
 
+def calculate(amplitudes):
+    # Calculate the new amplitudes using the model.
+    temp_dataset = SingularAmplitudeDataset(amplitudes)
+    temp_dataloader = DataLoader(temp_dataset, batch_size=1, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
+
+    new_amps = []
+    for temp_data in temp_dataloader:
+        temp_data = Variable(temp_data).cuda()
+        temp_output = model(temp_data.float())
+        new_amps.append(temp_output.cpu().detach().numpy()[0])
+
+    return numpy.array(new_amps)
+
+
+def process_file(filename):
+    # Runs a file through the neural network.
+    print("\nRunning file " + filename + " through the neural network.")
+    file = read_file(filename)
+    left, right = split_stereo(file)
+
+    left = zero_pad(left, SEG_LENGTH)
+    right = zero_pad(right, SEG_LENGTH)
+
+    nperseg = int(len(left) / SEG_LENGTH * 2)  # to make sure all segments are of SEG_LENGTH
+
+    stft_left = stft(left, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+    stft_right = stft(right, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+
+    amp_left = to_amplitude(stft_left)
+    amp_right = to_amplitude(stft_right)
+
+    phase_left = to_phase(stft_left)
+    phase_right = to_phase(stft_right)
+
+    new_left = calculate(amp_left)
+    new_right = calculate(amp_right)
+
+    signal_left = to_signal(new_left, phase_left)
+    signal_right = to_signal(new_right, phase_right)
+
+    istft_left = istft(signal_left, fs=SAMPLE_RATE, nperseg=nperseg)[1]
+    istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=nperseg)[1]
+
+    to_write = merge_stereo(istft_left, istft_right)
+    write_file(to_write, "output.wav")
+    print("File successfully processed, written to output.wav.")
+
+
 class AmplitudeDataset(Dataset):
+    def __init__(self, filenames):
+        # filenames = array with filenames
+        # self.amps = array with amplitudes
+        # Reads all files and processes them.
+        temp = []
+
+        for filename in filenames:
+            print("Reading file " + filename + "...")
+            file = read_file(filename)
+            left, right = split_stereo(file)
+
+            left = zero_pad(left, SEG_LENGTH)
+            right = zero_pad(right, SEG_LENGTH)
+
+            nperseg = int(len(left) / SEG_LENGTH * 2)
+
+            stft_left = stft(left, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+            stft_right = stft(right, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+
+            temp.append(to_amplitude(stft_left))
+            temp.append(to_amplitude(stft_right))
+        self.amps = numpy.concatenate(temp)
+        print("\nFinished reading all files.\n")
+
+    def __len__(self):
+        return len(self.amps)
+
+    def __getitem__(self, idx):
+        return self.amps[idx]
+
+
+class SingularAmplitudeDataset(Dataset):
     def __init__(self, amplitudes):
-        # amplitude_collection = array with arrays of amplitudes for 1 STFT
-        # self.amps = amplitude_collection
-        self.amps = torch.from_numpy(amplitudes)
+        self.amps = amplitudes
 
     def __len__(self):
         return len(self.amps)
@@ -128,12 +207,12 @@ class AutoEncoder(nn.Module):
         super(AutoEncoder, self).__init__()
         self.encoder = nn.Sequential(
             nn.Linear(SEG_LENGTH, FIRST_LAYER_SIZE),
-            nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE),
+            # nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE),
             # nn.Linear(SECOND_LAYER_SIZE, THIRD_LAYER_SIZE)
         )
         self.decoder = nn.Sequential(
             # nn.Linear(THIRD_LAYER_SIZE, SECOND_LAYER_SIZE),
-            nn.Linear(SECOND_LAYER_SIZE, FIRST_LAYER_SIZE),
+            # nn.Linear(SECOND_LAYER_SIZE, FIRST_LAYER_SIZE),
             nn.Linear(FIRST_LAYER_SIZE, SEG_LENGTH)
         )
 
@@ -143,25 +222,10 @@ class AutoEncoder(nn.Module):
         return x
 
 
-file = read_file(FILENAME)
-left, right = split_stereo(file)
-
-left = zero_pad(left, SEG_LENGTH)
-right = zero_pad(right, SEG_LENGTH)
-
-NPERSEG = int(len(left) / SEG_LENGTH * 2)       # to make sure all segments are of SEG_LENGTH
-
-stft_left = stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2]
-stft_right = stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2]
-
-amp_left = to_amplitude(stft_left)
-amp_right = to_amplitude(stft_right)
-
-phase_left = to_phase(stft_left)
-phase_right = to_phase(stft_right)
+file_list = ["oneandonly.wav", "doot.wav"]
 
 # NN setup
-dataset = AmplitudeDataset(amp_left)
+dataset = AmplitudeDataset(file_list)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
 model = AutoEncoder().cuda()
 criterion = nn.MSELoss()
@@ -180,20 +244,4 @@ for epoch in range(EPOCHS):
         optimizer.step()
     print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, EPOCHS, loss.data.item()))
 
-# Runs the left channel through the NN
-new_amps = []
-dataloader = DataLoader(dataset, batch_size=1, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
-for data in dataloader:
-    data = Variable(data).cuda()
-    output = model(data.float())
-    new_amps.append(output.cpu().detach().numpy()[0])
-new_left = numpy.array(new_amps)
-
-signal_left = to_signal(new_left, phase_left)
-signal_right = to_signal(amp_right, phase_right)
-
-istft_left = istft(signal_left, fs=SAMPLE_RATE, nperseg=NPERSEG)[1]
-istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=NPERSEG)[1]
-
-to_write = merge_stereo(istft_left, istft_right)
-write_file(to_write, "output.wav")
+process_file("oneandonly.wav")
