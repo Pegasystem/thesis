@@ -42,12 +42,8 @@ def write_file(stereo, filename):
 def split_stereo(stereo_samples):
     # Splits an array of stereo audio into it's left channel and it's right channel.
     # Returns a tuple of the left channel and the right channel.
-    left_channel = []
-    right_channel = []
-
-    for sample in stereo_samples:
-        left_channel.append(sample[0])
-        right_channel.append(sample[1])
+    left_channel = stereo_samples[:, 0]
+    right_channel = stereo_samples[:, 1]
 
     return left_channel, right_channel
 
@@ -55,12 +51,9 @@ def split_stereo(stereo_samples):
 def merge_stereo(left_channel, right_channel):
     # Merges a given left and right channel back into stereo audio.
     # Returns a numpy array with stereo audio which can be written with scipy's wavfile library.
-    stereo = []
+    stereo = numpy.stack([left_channel, right_channel], axis=1)
 
-    for value, sample in enumerate(left_channel):
-        stereo.append([sample, right_channel[value]])
-
-    return numpy.array(stereo)
+    return stereo
 
 
 def zero_pad(signal, modulo):
