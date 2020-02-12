@@ -8,6 +8,9 @@ from torch import nn
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
+# FILE_LIST should contain a file on every line.
+FILE_LIST = "files.txt"
+
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 SEG_LENGTH = 1024       # amount of samples in a single segment
 
@@ -222,7 +225,12 @@ class AutoEncoder(nn.Module):
         return x
 
 
-file_list = ["oneandonly.wav", "doot.wav"]
+file_list = []
+with open(FILE_LIST) as file:
+    for line in file:
+        line = line[:-1]
+        file_list.append(line)
+del file_list[-1]
 
 # NN setup
 dataset = AmplitudeDataset(file_list)
