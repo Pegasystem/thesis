@@ -1,5 +1,6 @@
 from math import sqrt, atan2
 from cmath import exp
+from multiprocessing import Manager, Pool
 import numpy
 from scipy.io import wavfile
 from scipy.signal import stft, istft
@@ -8,16 +9,16 @@ from torch import nn
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
-# FILE_LIST should contain a file on every line.
+# FILE_LIST should contain a filename (or path to a file) on every line.
 FILE_LIST = "files.txt"
 
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 SEG_LENGTH = 1024       # amount of samples in a single segment
 
 BATCH_SIZE = 256        # amount of pieces the DataLoader will put together
-EPOCHS = 25
+EPOCHS = 100
 SHUFFLE = False         # don't order samples randomly
-NUM_WORKERS = 4         # for multithreading
+NUM_WORKERS = 8         # for multithreading/multiprocessing
 LEARNING_RATE = 0.001
 
 FIRST_LAYER_SIZE = 512
@@ -163,28 +164,37 @@ def process_file(filename):
 
 
 class AmplitudeDataset(Dataset):
+    def main_loop(self, filename):
+        print("Reading file " + filename + "...")
+        file = read_file(filename)
+        left, right = split_stereo(file)
+
+        left = zero_pad(left, SEG_LENGTH)
+        right = zero_pad(right, SEG_LENGTH)
+
+        nperseg = int(len(left) / SEG_LENGTH * 2)
+
+        stft_left = stft(left, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+        stft_right = stft(right, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+
+        self.temp.append(to_amplitude(stft_left))
+        self.temp.append(to_amplitude(stft_right))
+
     def __init__(self, filenames):
         # filenames = array with filenames
         # self.amps = array with amplitudes
         # Reads all files and processes them.
-        temp = []
+        manager = Manager()
+        self.temp = manager.list()
 
-        for filename in filenames:
-            print("Reading file " + filename + "...")
-            file = read_file(filename)
-            left, right = split_stereo(file)
+        pool = Pool(NUM_WORKERS)
+        pool.map(self.main_loop, filenames)
+        pool.close()
 
-            left = zero_pad(left, SEG_LENGTH)
-            right = zero_pad(right, SEG_LENGTH)
-
-            nperseg = int(len(left) / SEG_LENGTH * 2)
-
-            stft_left = stft(left, fs=SAMPLE_RATE, nperseg=nperseg)[2]
-            stft_right = stft(right, fs=SAMPLE_RATE, nperseg=nperseg)[2]
-
-            temp.append(to_amplitude(stft_left))
-            temp.append(to_amplitude(stft_right))
-        self.amps = numpy.concatenate(temp)
+        print(len(filenames))
+        print(len(self.temp))
+        self.amps = numpy.concatenate(self.temp)
+        self.temp = None        # free up memory
         print("\nFinished reading all files.\n")
 
     def __len__(self):
@@ -226,8 +236,8 @@ class AutoEncoder(nn.Module):
 
 
 file_list = []
-with open(FILE_LIST) as file:
-    for line in file:
+with open(FILE_LIST) as to_read:
+    for line in to_read:
         line = line[:-1]
         file_list.append(line)
 del file_list[-1]
@@ -251,5 +261,10 @@ for epoch in range(EPOCHS):
         loss.backward()
         optimizer.step()
     print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, EPOCHS, loss.data.item()))
+
+# model = AutoEncoder().cuda()
+# model.load_state_dict(torch.load("model"))
+
+# torch.save(model.state_dict(), "model")
 
 process_file("oneandonly.wav")
