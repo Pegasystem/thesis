@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 FILE_LIST = "files.txt"
 
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
-SEG_LENGTH = 1024       # amount of samples in a single segment
+NPERSEG = 2048          # amount of samples in a single segment
 
 BATCH_SIZE = 256        # amount of pieces the DataLoader will put together
 EPOCHS = 100
@@ -21,6 +21,7 @@ SHUFFLE = False         # don't order samples randomly
 NUM_WORKERS = 8         # for multithreading/multiprocessing
 LEARNING_RATE = 0.001
 
+INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)     # because the output of the STFT is of length NPERSEG / 2 + 1
 FIRST_LAYER_SIZE = 512
 SECOND_LAYER_SIZE = 256
 THIRD_LAYER_SIZE = 128
@@ -79,7 +80,6 @@ def to_amplitude(stft_in):
         for sample in window:
             amplitude = sqrt(sample.real ** 2 + sample.imag ** 2)
             temp.append(amplitude)
-        del temp[-1]        # to make sure it's of SEG_LENGTH
         amplitudes.append(temp)
 
     return numpy.array(amplitudes)
@@ -95,7 +95,6 @@ def to_phase(stft_in):
         for sample in window:
             phase = atan2(sample.imag, sample.real)
             temp.append(phase)
-        del temp[-1]  # to make sure it's of SEG_LENGTH
         phases.append(temp)
 
     return numpy.array(phases)
@@ -112,7 +111,7 @@ def to_signal(amplitudes, phases):
             temp.append(sample_amp * exp(1j * sample_phase))
         signal.append(temp)
 
-    return numpy.array(signal)
+    return numpy.transpose(numpy.array(signal))
 
 
 def calculate(amplitudes):
@@ -135,8 +134,8 @@ def process_file(filename):
     file = read_file(filename)
     left, right = split_stereo(file)
 
-    stft_left = stft(left, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
-    stft_right = stft(right, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
+    stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+    stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
 
     amp_left = to_amplitude(stft_left)
     amp_right = to_amplitude(stft_right)
@@ -150,15 +149,15 @@ def process_file(filename):
     signal_left = to_signal(new_left, phase_left)
     signal_right = to_signal(new_right, phase_right)
 
-    istft_left = istft(signal_left, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[1]
-    istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[1]
+    istft_left = istft(signal_left, fs=SAMPLE_RATE, nperseg=NPERSEG)[1]
+    istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=NPERSEG)[1]
 
     to_write = merge_stereo(istft_left, istft_right)
     write_file(to_write, "output.wav")
     print("File successfully processed, written to output.wav.")
 
 
-def train(filenames, model):
+def train(filenames):
     dataset = AmplitudeDataset(filenames)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
     criterion = nn.MSELoss()
@@ -183,8 +182,8 @@ class AmplitudeDataset(Dataset):
         file = read_file(filename)
         left, right = split_stereo(file)
 
-        stft_left = stft(left, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
-        stft_right = stft(right, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
+        stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+        stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
 
         self.temp.append(to_amplitude(stft_left))
         self.temp.append(to_amplitude(stft_right))
@@ -226,14 +225,14 @@ class AutoEncoder(nn.Module):
     def __init__(self):
         super(AutoEncoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(SEG_LENGTH, FIRST_LAYER_SIZE),
+            nn.Linear(INPUT_LAYER_SIZE, FIRST_LAYER_SIZE),
             # nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE),
             # nn.Linear(SECOND_LAYER_SIZE, THIRD_LAYER_SIZE)
         )
         self.decoder = nn.Sequential(
             # nn.Linear(THIRD_LAYER_SIZE, SECOND_LAYER_SIZE),
             # nn.Linear(SECOND_LAYER_SIZE, FIRST_LAYER_SIZE),
-            nn.Linear(FIRST_LAYER_SIZE, SEG_LENGTH)
+            nn.Linear(FIRST_LAYER_SIZE, INPUT_LAYER_SIZE)
         )
 
     def forward(self, x):
@@ -249,8 +248,11 @@ with open(FILE_LIST) as to_read:
         file_list.append(line)
 del file_list[-1]
 
-autoencoder = AutoEncoder().cuda()
+model = AutoEncoder().cuda()
+train(file_list)
 
-# autoencoder.load_state_dict(torch.load("model"))
+# model.load_state_dict(torch.load("model"))
 
-# torch.save(autoenconder.state_dict(), "model")
+# torch.save(model.state_dict(), "model")
+
+process_file("oneandonly.wav")
