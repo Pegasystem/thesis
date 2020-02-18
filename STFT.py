@@ -135,13 +135,8 @@ def process_file(filename):
     file = read_file(filename)
     left, right = split_stereo(file)
 
-    left = zero_pad(left, SEG_LENGTH)
-    right = zero_pad(right, SEG_LENGTH)
-
-    nperseg = int(len(left) / SEG_LENGTH * 2)  # to make sure all segments are of SEG_LENGTH
-
-    stft_left = stft(left, fs=SAMPLE_RATE, nperseg=nperseg)[2]
-    stft_right = stft(right, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+    stft_left = stft(left, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
+    stft_right = stft(right, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
 
     amp_left = to_amplitude(stft_left)
     amp_right = to_amplitude(stft_right)
@@ -155,12 +150,31 @@ def process_file(filename):
     signal_left = to_signal(new_left, phase_left)
     signal_right = to_signal(new_right, phase_right)
 
-    istft_left = istft(signal_left, fs=SAMPLE_RATE, nperseg=nperseg)[1]
-    istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=nperseg)[1]
+    istft_left = istft(signal_left, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[1]
+    istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[1]
 
     to_write = merge_stereo(istft_left, istft_right)
     write_file(to_write, "output.wav")
     print("File successfully processed, written to output.wav.")
+
+
+def train(filenames, model):
+    dataset = AmplitudeDataset(filenames)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+
+    for epoch in range(EPOCHS):
+        for data in dataloader:
+            data = Variable(data).cuda()
+
+            output = model(data.float())
+            loss = criterion(output, data.float())
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, EPOCHS, loss.data.item()))
 
 
 class AmplitudeDataset(Dataset):
@@ -169,13 +183,8 @@ class AmplitudeDataset(Dataset):
         file = read_file(filename)
         left, right = split_stereo(file)
 
-        left = zero_pad(left, SEG_LENGTH)
-        right = zero_pad(right, SEG_LENGTH)
-
-        nperseg = int(len(left) / SEG_LENGTH * 2)
-
-        stft_left = stft(left, fs=SAMPLE_RATE, nperseg=nperseg)[2]
-        stft_right = stft(right, fs=SAMPLE_RATE, nperseg=nperseg)[2]
+        stft_left = stft(left, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
+        stft_right = stft(right, fs=SAMPLE_RATE, nperseg=SEG_LENGTH)[2]
 
         self.temp.append(to_amplitude(stft_left))
         self.temp.append(to_amplitude(stft_right))
@@ -191,8 +200,6 @@ class AmplitudeDataset(Dataset):
         pool.map(self.main_loop, filenames)
         pool.close()
 
-        print(len(filenames))
-        print(len(self.temp))
         self.amps = numpy.concatenate(self.temp)
         self.temp = None        # free up memory
         print("\nFinished reading all files.\n")
@@ -242,29 +249,8 @@ with open(FILE_LIST) as to_read:
         file_list.append(line)
 del file_list[-1]
 
-# NN setup
-dataset = AmplitudeDataset(file_list)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
-model = AutoEncoder().cuda()
-criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+autoencoder = AutoEncoder().cuda()
 
-# NN training
-for epoch in range(EPOCHS):
-    for data in dataloader:
-        data = Variable(data).cuda()
+# autoencoder.load_state_dict(torch.load("model"))
 
-        output = model(data.float())
-        loss = criterion(output, data.float())
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-    print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, EPOCHS, loss.data.item()))
-
-# model = AutoEncoder().cuda()
-# model.load_state_dict(torch.load("model"))
-
-# torch.save(model.state_dict(), "model")
-
-process_file("oneandonly.wav")
+# torch.save(autoenconder.state_dict(), "model")
