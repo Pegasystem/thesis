@@ -73,45 +73,22 @@ def zero_pad(signal, modulo):
 def to_amplitude(stft_in):
     # Converts the given STFT data to the appropriate amplitudes.
     # Returns the same type of array, with amplitudes instead of complex numbers.
-    amplitudes = []
 
-    for window in stft_in:
-        temp = []
-        for sample in window:
-            amplitude = sqrt(sample.real ** 2 + sample.imag ** 2)
-            temp.append(amplitude)
-        amplitudes.append(temp)
-
-    return numpy.array(amplitudes)
+    return numpy.sqrt(numpy.imag(stft_in) ** 2 + numpy.real(stft_in) ** 2)
 
 
 def to_phase(stft_in):
     # Converts the given STFT data to the appropriate phases.
     # Returns the same type of array, with phases instead of complex numbers.
-    phases = []
 
-    for window in stft_in:
-        temp = []
-        for sample in window:
-            phase = atan2(sample.imag, sample.real)
-            temp.append(phase)
-        phases.append(temp)
-
-    return numpy.array(phases)
+    return numpy.arctan2(numpy.imag(stft_in), numpy.real(stft_in))
 
 
 def to_signal(amplitudes, phases):
     # Merges the given set of amplitudes and phases back into an audio signal.
     # Returns an array of complex numbers ready to be fed to the iSTFT function.
-    signal = []
 
-    for window_amp, window_phase in zip(amplitudes, phases):
-        temp = []
-        for sample_amp, sample_phase in zip(window_amp, window_phase):
-            temp.append(sample_amp * exp(1j * sample_phase))
-        signal.append(temp)
-
-    return numpy.transpose(numpy.array(signal))
+    return numpy.transpose(amplitudes * numpy.exp(1j * phases))
 
 
 def calculate(amplitudes):
@@ -249,7 +226,7 @@ with open(FILE_LIST) as to_read:
 del file_list[-1]
 
 model = AutoEncoder().cuda()
-train(file_list)
+# train(file_list)
 
 # model.load_state_dict(torch.load("model"))
 
