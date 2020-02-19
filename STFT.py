@@ -17,7 +17,6 @@ NPERSEG = 2048          # amount of samples in a single segment
 
 BATCH_SIZE = 256        # amount of pieces the DataLoader will put together
 EPOCHS = 100
-SHUFFLE = False         # don't order samples randomly
 NUM_WORKERS = 8         # for multithreading/multiprocessing
 LEARNING_RATE = 0.001
 
@@ -94,7 +93,7 @@ def to_signal(amplitudes, phases):
 def calculate(amplitudes):
     # Calculate the new amplitudes using the model.
     temp_dataset = SingularAmplitudeDataset(amplitudes)
-    temp_dataloader = DataLoader(temp_dataset, batch_size=1, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
+    temp_dataloader = DataLoader(temp_dataset, num_workers=NUM_WORKERS)
 
     new_amps = []
     for temp_data in temp_dataloader:
@@ -135,8 +134,10 @@ def process_file(filename):
 
 
 def train(filenames):
-    dataset = AmplitudeDataset(filenames)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
+    # dataset = AmplitudeDatasetMemory(filenames)
+    # dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS)
+    dataset = AmplitudeDatasetDynamic(filenames)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
 
@@ -153,9 +154,8 @@ def train(filenames):
         print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, EPOCHS, loss.data.item()))
 
 
-class AmplitudeDataset(Dataset):
+class AmplitudeDatasetMemory(Dataset):
     def main_loop(self, filename):
-        print("Reading file " + filename + "...")
         file = read_file(filename)
         left, right = split_stereo(file)
 
@@ -168,7 +168,8 @@ class AmplitudeDataset(Dataset):
     def __init__(self, filenames):
         # filenames = array with filenames
         # self.amps = array with amplitudes
-        # Reads all files and processes them.
+        # Reads all files and processes them - memory intensive!
+        print("Reading files - this might take a while...")
         manager = Manager()
         self.temp = manager.list()
 
@@ -185,6 +186,60 @@ class AmplitudeDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.amps[idx]
+
+
+class AmplitudeDatasetDynamic(Dataset):
+    # DO NOT SET NUM_WORKERS OF THE DATALOADER! GETITEM IS NOT SUITABLE FOR MULTIPROCESSING!
+
+    def calculate_length(self, filename):
+        file = read_file(filename)
+        left, right = split_stereo(file)
+        stft_temp = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+        self.temp.append(len(stft_temp))
+
+    def __init__(self, filenames):
+        # filenames = array with filenames
+        # self.length = dataset length
+        # self.filenames = array with list of filenames to be read
+        # self.amps = array that contains the currently read file
+        # Calculates dataset length.
+        print("Calculating dataset length - this might take a while...")
+        manager = Manager()
+        self.temp = manager.list()
+        self.filenames = filenames
+        self.filenames_temp = self.filenames.copy()
+        self.amps = []
+
+        pool = Pool(NUM_WORKERS)
+        pool.map(self.calculate_length, filenames)
+        pool.close()
+
+        self.length = sum(self.temp)
+        self.temp = None        # no longer neccesary
+        print("\nFinished calculating dataset length, amount of STFTs: " + str(self.length) + ".\n")
+
+    def __len__(self):
+        return self.length * 2      # to make the dataloader actually read all files every epoch instead of half
+
+    def __getitem__(self, idx):
+        if len(self.amps) == 0:
+            # Read the next file.
+            if len(self.filenames_temp) == 0:
+                # Start over from the beginning.
+                self.filenames_temp.extend(self.filenames)
+            filename = self.filenames_temp.pop()
+            file = read_file(filename)
+            left, right = split_stereo(file)
+
+            stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+            stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+
+            self.amps.extend(to_amplitude(stft_left))
+            self.amps.extend(to_amplitude(stft_right))
+            return self.amps.pop()
+        else:
+            # Returns a sample from the currently read file.
+            return self.amps.pop()
 
 
 class SingularAmplitudeDataset(Dataset):
@@ -223,13 +278,12 @@ with open(FILE_LIST) as to_read:
     for line in to_read:
         line = line[:-1]
         file_list.append(line)
-del file_list[-1]
 
 model = AutoEncoder().cuda()
-# train(file_list)
+train(file_list)
 
 # model.load_state_dict(torch.load("model"))
 
-# torch.save(model.state_dict(), "model")
+torch.save(model.state_dict(), "model-120")
 
-process_file("oneandonly.wav")
+process_file("candybits_128.wav")
