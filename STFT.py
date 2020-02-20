@@ -10,7 +10,7 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
 # FILE_LIST should contain a filename (or path to a file) on every line.
-FILE_LIST = "files.txt"
+FILE_LIST = "files.txt.22"
 
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 NPERSEG = 2048          # amount of samples in a single segment
@@ -141,6 +141,7 @@ def train(filenames):
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
 
+    print("Starting training...")
     for epoch in range(EPOCHS):
         for data in dataloader:
             data = Variable(data).cuda()
@@ -155,6 +156,8 @@ def train(filenames):
 
 
 class AmplitudeDatasetMemory(Dataset):
+    # VERY MEMORY INTENSIVE!
+
     def main_loop(self, filename):
         file = read_file(filename)
         left, right = split_stereo(file)
@@ -168,7 +171,7 @@ class AmplitudeDatasetMemory(Dataset):
     def __init__(self, filenames):
         # filenames = array with filenames
         # self.amps = array with amplitudes
-        # Reads all files and processes them - memory intensive!
+        # Reads all files and processes them.
         print("Reading files - this might take a while...")
         manager = Manager()
         self.temp = manager.list()
@@ -179,7 +182,7 @@ class AmplitudeDatasetMemory(Dataset):
 
         self.amps = numpy.concatenate(self.temp)
         self.temp = None        # free up memory
-        print("\nFinished reading all files.\n")
+        print("Finished reading all files.\n")
 
     def __len__(self):
         return len(self.amps)
@@ -197,6 +200,13 @@ class AmplitudeDatasetDynamic(Dataset):
         stft_temp = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
         self.temp.append(len(stft_temp))
 
+    def do_stft(self, filename):
+        file = read_file(filename)
+        left, right = split_stereo(file)
+        stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+        stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+        self.temp.append((stft_left, stft_right))
+
     def __init__(self, filenames):
         # filenames = array with filenames
         # self.length = dataset length
@@ -206,6 +216,7 @@ class AmplitudeDatasetDynamic(Dataset):
         print("Calculating dataset length - this might take a while...")
         manager = Manager()
         self.temp = manager.list()
+        self.stft = []
         self.filenames = filenames
         self.filenames_temp = self.filenames.copy()
         self.amps = []
@@ -215,8 +226,7 @@ class AmplitudeDatasetDynamic(Dataset):
         pool.close()
 
         self.length = sum(self.temp)
-        self.temp = None        # no longer neccesary
-        print("\nFinished calculating dataset length, amount of STFTs: " + str(self.length) + ".\n")
+        print("Finished calculating dataset length, amount of STFTs: " + str(self.length) + ".\n")
 
     def __len__(self):
         return self.length * 2      # to make the dataloader actually read all files every epoch instead of half
@@ -227,15 +237,25 @@ class AmplitudeDatasetDynamic(Dataset):
             if len(self.filenames_temp) == 0:
                 # Start over from the beginning.
                 self.filenames_temp.extend(self.filenames)
-            filename = self.filenames_temp.pop()
-            file = read_file(filename)
-            left, right = split_stereo(file)
+            if len(self.stft) == 0:
+                manager = Manager()
+                self.temp = manager.list()
+                temp = []
+                while len(temp) != 8 and len(self.filenames_temp) != 0:
+                    temp.append(self.filenames_temp.pop())
+                print(temp)
 
-            stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
-            stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+                pool = Pool(NUM_WORKERS)
+                pool.map(self.do_stft, temp)
+                pool.close()
 
-            self.amps.extend(to_amplitude(stft_left))
-            self.amps.extend(to_amplitude(stft_right))
+                self.stft = self.temp[:]
+                current_stft = self.stft.pop()
+            else:
+                current_stft = self.stft.pop()
+
+            self.amps.extend(to_amplitude(current_stft[0]))
+            self.amps.extend(to_amplitude(current_stft[1]))
             return self.amps.pop()
         else:
             # Returns a sample from the currently read file.
@@ -282,8 +302,8 @@ with open(FILE_LIST) as to_read:
 model = AutoEncoder().cuda()
 train(file_list)
 
-# model.load_state_dict(torch.load("model"))
+# model.load_state_dict(torch.load("model-120"))
 
-torch.save(model.state_dict(), "model-120")
+# torch.save(model.state_dict(), "model")
 
-process_file("candybits_128.wav")
+# process_file("candybits_192.wav")
