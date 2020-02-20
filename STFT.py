@@ -1,3 +1,4 @@
+import datetime
 from multiprocessing import Manager, Pool
 import numpy
 from scipy.io import wavfile
@@ -8,14 +9,15 @@ from torch import nn
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
-# FILE_LIST should contain a filename (or path to a file) on every line.
-FILE_LIST = "files.txt.22"
+# File lists should contain a filename (or path to a file) on every line.
+TRAIN_LIST = "files.txt"
+VALIDATION_LIST = "validation.txt"
 
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 NPERSEG = 2048          # amount of samples in a single segment
 
 BATCH_SIZE = 256        # amount of pieces the DataLoader will put together
-EPOCHS = 100
+EPOCHS = 25
 NUM_WORKERS = 8         # for multithreading/multiprocessing
 LEARNING_RATE = 0.0002
 
@@ -95,10 +97,12 @@ def calculate(amplitudes):
     temp_dataloader = DataLoader(temp_dataset, num_workers=NUM_WORKERS)
 
     new_amps = []
-    for temp_data in temp_dataloader:
-        temp_data = Variable(temp_data).cuda()
-        temp_output = model(temp_data.float())
-        new_amps.append(temp_output.cpu().detach().numpy()[0])
+    model.eval()
+    with torch.no_grad():
+        for temp_data in temp_dataloader:
+            temp_data = Variable(temp_data).cuda()
+            temp_output = model(temp_data.float())
+            new_amps.append(temp_output.cpu().detach().numpy()[0])
 
     return numpy.array(new_amps)
 
@@ -156,28 +160,38 @@ def process_file(filename):
     print("File successfully processed, written to output.wav.")
 
 
-def train(filenames):
-    # dataset = AmplitudeDatasetMemory(filenames)
-    # dataloader = DataLoader(dataset, batch_size=BATCH_SIZE)
-    dataset = AmplitudeDatasetDynamic(filenames)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE)
+def train(training_files, validation_files):
+    train_dataset = AmplitudeDatasetDynamic(training_files)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE)
+    validation_dataset = AmplitudeDatasetDynamic(validation_files)
+    validation_dataloader = DataLoader(validation_dataset, batch_size=BATCH_SIZE)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
 
     print("Starting training...")
+    total_time = 0
     for epoch in range(EPOCHS):
         start = time.time()
-        for data in dataloader:
+        model.train()
+        for data in train_dataloader:
             data = Variable(data).cuda()
-
             output = model(data.float())
-            loss = criterion(output, data.float())
+            train_loss = criterion(output, data.float())
 
             optimizer.zero_grad()
-            loss.backward()
+            train_loss.backward()
             optimizer.step()
-        print("epoch [{}/{}], loss: {:.4f}, time: {:.2f}s".format(epoch + 1, EPOCHS, loss.data.item(),
-                                                                  time.time() - start))
+        model.eval()
+        with torch.no_grad():
+            for data in validation_dataloader:
+                data = Variable(data).cuda()
+                output = model(data.float())
+                validation_loss = criterion(output, data.float())
+        end = time.time() - start
+        total_time += end
+        estimate = str(datetime.timedelta(seconds=round((total_time / (epoch + 1)) * (EPOCHS - epoch + 1))))
+        print("epoch [{}/{}], loss: {:.4f}, val. loss: {:.4f}, time: {:.2f}s, est. time: {}"
+              .format(epoch + 1, EPOCHS, train_loss.item(), validation_loss.item(), end, estimate))
 
 
 class AmplitudeDatasetDynamic(Dataset):
@@ -196,11 +210,10 @@ class AmplitudeDatasetDynamic(Dataset):
         print("Calculating dataset length - this might take a while...")
         manager = Manager()
         self.temp = manager.list()
-        self.stft = []
         self.filenames = filenames
         self.filenames_temp = self.filenames.copy()
         self.amps = []
-        self.amps_reversed = reversed(self.amps)
+        self.stft = []
 
         pool = Pool(NUM_WORKERS)
         pool.map(self.calculate_length, filenames)
@@ -235,10 +248,10 @@ class AmplitudeDatasetDynamic(Dataset):
                 current_stft = self.stft.pop()
 
             self.amps.extend(current_stft)
-            return self.amps.pop()      # this has to be reversed I think
-        else:
-            # Returns a sample from the currently read file.
-            return self.amps.pop()
+            self.amps_reversed = self.amps[::-1]
+        # Returns a sample from the currently read file.
+        self.amps.pop()
+        return self.amps_reversed[len(self.amps_reversed) - len(self.amps) - 1]
 
 
 class SingularAmplitudeDataset(Dataset):
@@ -272,19 +285,25 @@ class AutoEncoder(nn.Module):
         return x
 
 
-file_list = []
-with open(FILE_LIST) as to_read:
+train_list = []
+with open(TRAIN_LIST) as to_read:
     for line in to_read:
         line = line[:-1]
-        file_list.append(line)
+        train_list.append(line)
+
+validation_list = []
+with open(VALIDATION_LIST) as to_read:
+    for line in to_read:
+        line = line[:-1]
+        validation_list.append(line)
 
 model = AutoEncoder().cuda()
-train(file_list)
+train(train_list, validation_list)
 
 # model.load_state_dict(torch.load("model-120"))
 
-# torch.save(model.state_dict(), "model-120-bs256-lr2e-4-100epochs")
+torch.save(model.state_dict(), "model-120-bs256-lr2e-4-25epochs")
 
-# process_file("candybits_192.wav")
+process_file("candybits_192.wav")
 
-# convert_files(file_list)
+# convert_files(validation_list)
