@@ -1,9 +1,8 @@
-from math import sqrt, atan2
-from cmath import exp
 from multiprocessing import Manager, Pool
 import numpy
 from scipy.io import wavfile
 from scipy.signal import stft, istft
+import time
 import torch
 from torch import nn
 from torch.autograd import Variable
@@ -18,7 +17,7 @@ NPERSEG = 2048          # amount of samples in a single segment
 BATCH_SIZE = 256        # amount of pieces the DataLoader will put together
 EPOCHS = 100
 NUM_WORKERS = 8         # for multithreading/multiprocessing
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0002
 
 INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)     # because the output of the STFT is of length NPERSEG / 2 + 1
 FIRST_LAYER_SIZE = 512
@@ -104,6 +103,30 @@ def calculate(amplitudes):
     return numpy.array(new_amps)
 
 
+def convert_files(filenames):
+    pool = Pool(NUM_WORKERS)
+    pool.map(stft_to_file, filenames)
+    pool.close()
+
+
+def stft_to_file(filename):
+    file = read_file(filename)
+    left, right = split_stereo(file)
+
+    stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+    stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
+
+    to_write = to_amplitude(numpy.concatenate((stft_left, stft_right)))
+
+    numpy.savez(filename, to_write, stft=to_write)
+    print("Saved STFTs of " + filename + " to " + filename + ".npz.")
+
+
+def stft_from_file(filename):
+
+    return numpy.load(filename + ".npz")["stft"]
+
+
 def process_file(filename):
     # Runs a file through the neural network.
     print("\nRunning file " + filename + " through the neural network.")
@@ -135,7 +158,7 @@ def process_file(filename):
 
 def train(filenames):
     # dataset = AmplitudeDatasetMemory(filenames)
-    # dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS)
+    # dataloader = DataLoader(dataset, batch_size=BATCH_SIZE)
     dataset = AmplitudeDatasetDynamic(filenames)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE)
     criterion = nn.MSELoss()
@@ -143,6 +166,7 @@ def train(filenames):
 
     print("Starting training...")
     for epoch in range(EPOCHS):
+        start = time.time()
         for data in dataloader:
             data = Variable(data).cuda()
 
@@ -152,60 +176,16 @@ def train(filenames):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, EPOCHS, loss.data.item()))
-
-
-class AmplitudeDatasetMemory(Dataset):
-    # VERY MEMORY INTENSIVE!
-
-    def main_loop(self, filename):
-        file = read_file(filename)
-        left, right = split_stereo(file)
-
-        stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
-        stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
-
-        self.temp.append(to_amplitude(stft_left))
-        self.temp.append(to_amplitude(stft_right))
-
-    def __init__(self, filenames):
-        # filenames = array with filenames
-        # self.amps = array with amplitudes
-        # Reads all files and processes them.
-        print("Reading files - this might take a while...")
-        manager = Manager()
-        self.temp = manager.list()
-
-        pool = Pool(NUM_WORKERS)
-        pool.map(self.main_loop, filenames)
-        pool.close()
-
-        self.amps = numpy.concatenate(self.temp)
-        self.temp = None        # free up memory
-        print("Finished reading all files.\n")
-
-    def __len__(self):
-        return len(self.amps)
-
-    def __getitem__(self, idx):
-        return self.amps[idx]
+        print("epoch [{}/{}], loss: {:.4f}, time: {:.2f}s".format(epoch + 1, EPOCHS, loss.data.item(),
+                                                                  time.time() - start))
 
 
 class AmplitudeDatasetDynamic(Dataset):
-    # DO NOT SET NUM_WORKERS OF THE DATALOADER! GETITEM IS NOT SUITABLE FOR MULTIPROCESSING!
-
     def calculate_length(self, filename):
-        file = read_file(filename)
-        left, right = split_stereo(file)
-        stft_temp = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
-        self.temp.append(len(stft_temp))
+        self.temp.append(len(stft_from_file(filename)))
 
-    def do_stft(self, filename):
-        file = read_file(filename)
-        left, right = split_stereo(file)
-        stft_left = numpy.transpose(stft(left, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
-        stft_right = numpy.transpose(stft(right, fs=SAMPLE_RATE, nperseg=NPERSEG)[2])
-        self.temp.append((stft_left, stft_right))
+    def get_stft(self, filename):
+        self.temp.append(stft_from_file(filename))
 
     def __init__(self, filenames):
         # filenames = array with filenames
@@ -220,6 +200,7 @@ class AmplitudeDatasetDynamic(Dataset):
         self.filenames = filenames
         self.filenames_temp = self.filenames.copy()
         self.amps = []
+        self.amps_reversed = reversed(self.amps)
 
         pool = Pool(NUM_WORKERS)
         pool.map(self.calculate_length, filenames)
@@ -229,7 +210,7 @@ class AmplitudeDatasetDynamic(Dataset):
         print("Finished calculating dataset length, amount of STFTs: " + str(self.length) + ".\n")
 
     def __len__(self):
-        return self.length * 2      # to make the dataloader actually read all files every epoch instead of half
+        return self.length
 
     def __getitem__(self, idx):
         if len(self.amps) == 0:
@@ -241,12 +222,11 @@ class AmplitudeDatasetDynamic(Dataset):
                 manager = Manager()
                 self.temp = manager.list()
                 temp = []
-                while len(temp) != 8 and len(self.filenames_temp) != 0:
+                while len(temp) != NUM_WORKERS and len(self.filenames_temp) != 0:
                     temp.append(self.filenames_temp.pop())
-                print(temp)
 
                 pool = Pool(NUM_WORKERS)
-                pool.map(self.do_stft, temp)
+                pool.map(self.get_stft, temp)
                 pool.close()
 
                 self.stft = self.temp[:]
@@ -254,9 +234,8 @@ class AmplitudeDatasetDynamic(Dataset):
             else:
                 current_stft = self.stft.pop()
 
-            self.amps.extend(to_amplitude(current_stft[0]))
-            self.amps.extend(to_amplitude(current_stft[1]))
-            return self.amps.pop()
+            self.amps.extend(current_stft)
+            return self.amps.pop()      # this has to be reversed I think
         else:
             # Returns a sample from the currently read file.
             return self.amps.pop()
@@ -304,6 +283,8 @@ train(file_list)
 
 # model.load_state_dict(torch.load("model-120"))
 
-# torch.save(model.state_dict(), "model")
+# torch.save(model.state_dict(), "model-120-bs256-lr2e-4-100epochs")
 
 # process_file("candybits_192.wav")
+
+# convert_files(file_list)
