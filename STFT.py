@@ -9,15 +9,17 @@ from torch import nn
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
+DATASET = 83
+
 # File lists should contain a filename (or path to a file) on every line.
-TRAIN_LIST = "files.txt.22"
-VALIDATION_LIST = "validation.txt.83"
+TRAIN_LIST = "files.txt." + str(DATASET)
+VALIDATION_LIST = "validation.txt." + str(DATASET)
 
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
-NPERSEG = 2048          # amount of samples in a single segment
+NPERSEG = 2048          # amount of samples in a single segment - requires converting files again if changed
 
 BATCH_SIZE = 256
-EPOCHS = 25
+EPOCHS = 400
 NUM_WORKERS = 8         # amount of available CPU threads
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-5
@@ -26,6 +28,8 @@ INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)     # because the output of the STFT is 
 FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE / 2)
 SECOND_LAYER_SIZE = 256
 THIRD_LAYER_SIZE = 128
+
+PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "-epochs" + str(EPOCHS)
 
 
 def read_file(filename):
@@ -157,8 +161,8 @@ def process_file(filename):
     istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=NPERSEG)[1]
 
     to_write = merge_stereo(istft_left, istft_right)
-    write_file(to_write, "output.wav")
-    print("File successfully processed, written to output.wav.")
+    write_file(to_write, filename + "_" + PARAMS + ".output.wav")
+    print("File successfully processed, written to " + filename + "_" + PARAMS + ".output.wav.")
 
 
 def train(training_files, validation_files):
@@ -171,6 +175,8 @@ def train(training_files, validation_files):
 
     print("Starting training...")
     total_time = 0
+    train_losses = []
+    validation_losses = []
     for epoch in range(EPOCHS):
         start = time.time()
         model.train()
@@ -198,9 +204,13 @@ def train(training_files, validation_files):
         total_time += end
         train_loss = train_loss / len(train_dataloader)
         validation_loss = validation_loss / len(validation_dataloader)
+        train_losses.append(train_loss)
+        validation_losses.append(validation_loss)
         estimate = str(datetime.timedelta(seconds=round((total_time / (epoch + 1)) * (EPOCHS - epoch + 1))))
         print("epoch [{}/{}], loss: {:.4f}, val. loss: {:.4f}, time: {:.2f}s, est. time: {}"
               .format(epoch + 1, EPOCHS, train_loss, validation_loss, end, estimate))
+    print("Writing losses to file...")
+    numpy.savez("loss-" + PARAMS, train_loss=train_losses, val_loss=validation_losses)
 
 
 class AmplitudeDatasetDynamic(Dataset):
@@ -306,15 +316,11 @@ with open(VALIDATION_LIST) as to_read:
         line = line[:-1]
         validation_list.append(line)
 
+print("Parameters: " + PARAMS)
 model = AutoEncoder().cuda()
 train(train_list, validation_list)
+torch.save(model.state_dict(), "model-" + PARAMS + "-ReLU")
 
-# model.load_state_dict(torch.load("model-83-bs256-lr2e-4-50epochs"))
-# model.load_state_dict(torch.load("model-120-bs256-lr2e-4-50epochs"))
+# model.load_state_dict(torch.load("model-" + PARAMS + "-ReLU"))
 
-torch.save(model.state_dict(), "model-83-bs256-lr1e-3-25epochs-ReLU")
-
-process_file("candybits_128.wav")
-
-# convert_files(train_list)
-# convert_files(validation_list)
+process_file("night_orig.wav")
