@@ -10,19 +10,20 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
 # File lists should contain a filename (or path to a file) on every line.
-TRAIN_LIST = "files.txt"
-VALIDATION_LIST = "validation.txt"
+TRAIN_LIST = "files.txt.22"
+VALIDATION_LIST = "validation.txt.83"
 
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 NPERSEG = 2048          # amount of samples in a single segment
 
-BATCH_SIZE = 256        # amount of pieces the DataLoader will put together
+BATCH_SIZE = 256
 EPOCHS = 25
-NUM_WORKERS = 8         # for multithreading/multiprocessing
-LEARNING_RATE = 0.0002
+NUM_WORKERS = 8         # amount of available CPU threads
+LEARNING_RATE = 3e-4
+WEIGHT_DECAY = 1e-5
 
 INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)     # because the output of the STFT is of length NPERSEG / 2 + 1
-FIRST_LAYER_SIZE = 512
+FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE / 2)
 SECOND_LAYER_SIZE = 256
 THIRD_LAYER_SIZE = 128
 
@@ -122,13 +123,13 @@ def stft_to_file(filename):
 
     to_write = to_amplitude(numpy.concatenate((stft_left, stft_right)))
 
-    numpy.savez(filename, to_write, stft=to_write)
+    numpy.savez(filename, to_write)
     print("Saved STFTs of " + filename + " to " + filename + ".npz.")
 
 
 def stft_from_file(filename):
 
-    return numpy.load(filename + ".npz")["stft"]
+    return numpy.load(filename + ".npz")["arr_0"]
 
 
 def process_file(filename):
@@ -166,32 +167,40 @@ def train(training_files, validation_files):
     validation_dataset = AmplitudeDatasetDynamic(validation_files)
     validation_dataloader = DataLoader(validation_dataset, batch_size=BATCH_SIZE)
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
     print("Starting training...")
     total_time = 0
     for epoch in range(EPOCHS):
         start = time.time()
         model.train()
+        train_loss = 0
+        validation_loss = 0
         for data in train_dataloader:
             data = Variable(data).cuda()
             output = model(data.float())
-            train_loss = criterion(output, data.float())
+            loss = criterion(output, data.float())
 
             optimizer.zero_grad()
-            train_loss.backward()
+            loss.backward()
             optimizer.step()
+
+            train_loss += loss.item()
         model.eval()
         with torch.no_grad():
             for data in validation_dataloader:
                 data = Variable(data).cuda()
                 output = model(data.float())
-                validation_loss = criterion(output, data.float())
+                loss = criterion(output, data.float())
+
+                validation_loss += loss.item()
         end = time.time() - start
         total_time += end
+        train_loss = train_loss / len(train_dataloader)
+        validation_loss = validation_loss / len(validation_dataloader)
         estimate = str(datetime.timedelta(seconds=round((total_time / (epoch + 1)) * (EPOCHS - epoch + 1))))
         print("epoch [{}/{}], loss: {:.4f}, val. loss: {:.4f}, time: {:.2f}s, est. time: {}"
-              .format(epoch + 1, EPOCHS, train_loss.item(), validation_loss.item(), end, estimate))
+              .format(epoch + 1, EPOCHS, train_loss, validation_loss, end, estimate))
 
 
 class AmplitudeDatasetDynamic(Dataset):
@@ -269,7 +278,7 @@ class AutoEncoder(nn.Module):
     def __init__(self):
         super(AutoEncoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(INPUT_LAYER_SIZE, FIRST_LAYER_SIZE),
+            nn.Linear(INPUT_LAYER_SIZE, FIRST_LAYER_SIZE), nn.ReLU(True)
             # nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE),
             # nn.Linear(SECOND_LAYER_SIZE, THIRD_LAYER_SIZE)
         )
@@ -300,10 +309,12 @@ with open(VALIDATION_LIST) as to_read:
 model = AutoEncoder().cuda()
 train(train_list, validation_list)
 
-# model.load_state_dict(torch.load("model-120"))
+# model.load_state_dict(torch.load("model-83-bs256-lr2e-4-50epochs"))
+# model.load_state_dict(torch.load("model-120-bs256-lr2e-4-50epochs"))
 
-torch.save(model.state_dict(), "model-120-bs256-lr2e-4-25epochs")
+torch.save(model.state_dict(), "model-83-bs256-lr1e-3-25epochs-ReLU")
 
-process_file("candybits_192.wav")
+process_file("candybits_128.wav")
 
+# convert_files(train_list)
 # convert_files(validation_list)
