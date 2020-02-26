@@ -1,6 +1,8 @@
 import datetime
+from itertools import product
 from multiprocessing import Manager, Pool
 import numpy
+import os
 from scipy.io import wavfile
 from scipy.signal import stft, istft
 import time
@@ -8,18 +10,20 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
+import subprocess
 
 DATASET = 83
 
 # File lists should contain a filename (or path to a file) on every line.
 TRAIN_LIST = "files.txt." + str(DATASET)
 VALIDATION_LIST = "validation.txt." + str(DATASET)
+TEST_LIST = "test.txt." + str(DATASET)
 
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 NPERSEG = 2048          # amount of samples in a single segment - requires converting files again if changed
 
 BATCH_SIZE = 256
-EPOCHS = 400
+EPOCHS = 175
 NUM_WORKERS = 8         # amount of available CPU threads
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-5
@@ -30,6 +34,9 @@ SECOND_LAYER_SIZE = 256
 THIRD_LAYER_SIZE = 128
 
 PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "-epochs" + str(EPOCHS)
+
+ENVIRONMENT = os.environ.copy()
+ENVIRONMENT["GST_PLUGIN_PATH"] = "/usr/local/lib/gstreamer-1.0"
 
 
 def read_file(filename):
@@ -97,17 +104,17 @@ def to_signal(amplitudes, phases):
 
 
 def calculate(amplitudes):
-    # Calculate the new amplitudes using the model.
+    # Calculate the new amplitudes using the model - does not support CUDA.
     temp_dataset = SingularAmplitudeDataset(amplitudes)
-    temp_dataloader = DataLoader(temp_dataset, num_workers=NUM_WORKERS)
+    temp_dataloader = DataLoader(temp_dataset)
 
     new_amps = []
     model.eval()
     with torch.no_grad():
         for temp_data in temp_dataloader:
-            temp_data = Variable(temp_data).cuda()
+            temp_data = Variable(temp_data)
             temp_output = model(temp_data.float())
-            new_amps.append(temp_output.cpu().detach().numpy()[0])
+            new_amps.append(temp_output.detach().numpy()[0])
 
     return numpy.array(new_amps)
 
@@ -136,9 +143,40 @@ def stft_from_file(filename):
     return numpy.load(filename + ".npz")["arr_0"]
 
 
-def process_file(filename):
+def batch_peaq(filenames, to_replace):
+    tuples = []
+    for filename in filenames:
+        tuples.append((filename, filename.replace("orig", to_replace)))
+    pool = Pool(NUM_WORKERS)
+    results = pool.starmap(peaq, tuples)
+    pool.close()
+
+    print("Writing results to file...")
+    numpy.savez("peaq-" + to_replace + ".npz", results=results)
+
+
+def peaq(original, to_compare):
+    cmd = ["peaq", "--advanced", original, to_compare]
+    print("Comparing " + original + " to " + to_compare)
+    output = subprocess.Popen(cmd, stdout=subprocess.PIPE, env=ENVIRONMENT).communicate()[0]
+    output = output.decode("utf-8")
+    output = output.split('\n')
+    output = output[0].split()
+    return float(output[3])
+
+
+def batch_process(filenames):
+    tuples = []
+    for filename in filenames:
+        tuples.append((filename, filename.replace("orig", "output")))
+    pool = Pool(NUM_WORKERS)
+    pool.starmap(process_file, tuples)
+    pool.close()
+
+
+def process_file(filename, write_to):
     # Runs a file through the neural network.
-    print("\nRunning file " + filename + " through the neural network.")
+    print("Running file " + filename + " through the neural network.")
     file = read_file(filename)
     left, right = split_stereo(file)
 
@@ -161,8 +199,8 @@ def process_file(filename):
     istft_right = istft(signal_right, fs=SAMPLE_RATE, nperseg=NPERSEG)[1]
 
     to_write = merge_stereo(istft_left, istft_right)
-    write_file(to_write, filename + "_" + PARAMS + ".output.wav")
-    print("File successfully processed, written to " + filename + "_" + PARAMS + ".output.wav.")
+    write_file(to_write, write_to)
+    print("File successfully processed, written to " + write_to + ".")
 
 
 def train(training_files, validation_files):
@@ -209,7 +247,7 @@ def train(training_files, validation_files):
         estimate = str(datetime.timedelta(seconds=round((total_time / (epoch + 1)) * (EPOCHS - epoch + 1))))
         print("epoch [{}/{}], loss: {:.4f}, val. loss: {:.4f}, time: {:.2f}s, est. time: {}"
               .format(epoch + 1, EPOCHS, train_loss, validation_loss, end, estimate))
-    print("Writing losses to file...")
+    print("Writing losses to file...\n")
     numpy.savez("loss-" + PARAMS, train_loss=train_losses, val_loss=validation_losses)
 
 
@@ -316,11 +354,23 @@ with open(VALIDATION_LIST) as to_read:
         line = line[:-1]
         validation_list.append(line)
 
+test_list = []
+with open(TEST_LIST) as to_read:
+    for line in to_read:
+        line = line[:-1]
+        test_list.append(line)
+
 print("Parameters: " + PARAMS)
+
+"""
 model = AutoEncoder().cuda()
 train(train_list, validation_list)
 torch.save(model.state_dict(), "model-" + PARAMS + "-ReLU")
 
-# model.load_state_dict(torch.load("model-" + PARAMS + "-ReLU"))
+device = torch.device("cpu")
+model = AutoEncoder()
+model.load_state_dict(torch.load("model-" + PARAMS + "-ReLU", map_location=device))
 
-process_file("night_orig.wav")
+batch_process(test_list)
+batch_peaq(test_list, "output")
+"""
