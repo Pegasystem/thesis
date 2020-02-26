@@ -1,5 +1,5 @@
 import datetime
-from itertools import product
+import matplotlib.pyplot as plot
 from multiprocessing import Manager, Pool
 import numpy
 import os
@@ -22,8 +22,8 @@ TEST_LIST = "test.txt." + str(DATASET)
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 NPERSEG = 2048          # amount of samples in a single segment - requires converting files again if changed
 
-BATCH_SIZE = 256
-EPOCHS = 175
+BATCH_SIZE = 128
+EPOCHS = 50
 NUM_WORKERS = 8         # amount of available CPU threads
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-5
@@ -33,7 +33,8 @@ FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE / 2)
 SECOND_LAYER_SIZE = 256
 THIRD_LAYER_SIZE = 128
 
-PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "-epochs" + str(EPOCHS)
+PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "-epochs" + str(EPOCHS) + \
+         "-nperseg" + str(NPERSEG)
 
 ENVIRONMENT = os.environ.copy()
 ENVIRONMENT["GST_PLUGIN_PATH"] = "/usr/local/lib/gstreamer-1.0"
@@ -203,6 +204,33 @@ def process_file(filename, write_to):
     print("File successfully processed, written to " + write_to + ".")
 
 
+def plot_peaq():
+    peaq_128 = numpy.load("peaq-128.npz")["results"]
+    peaq_192 = numpy.load("peaq-192.npz")["results"]
+    peaq_320 = numpy.load("peaq-320.npz")["results"]
+    peaq_output = numpy.load("peaq-output.npz")["results"]
+
+    data = [peaq_128, peaq_192, peaq_320, peaq_output]
+    figure, axis = plot.subplots()
+    axis.set_title("PEAQ results - " + PARAMS)
+    axis.boxplot(data)
+    plot.xticks([1, 2, 3, 4], ["128kbps", "192kbps", "320kbps", "NN output"])
+
+    plot.show()
+
+
+def plot_loss(filename, epochs):
+    loss = numpy.load(filename)
+    train_loss = loss["train_loss"]
+    val_loss = loss["val_loss"]
+    epochs = list(range(1, epochs + 1))
+
+    plot.plot(epochs, train_loss)
+    plot.plot(epochs, val_loss)
+
+    plot.show()
+
+
 def train(training_files, validation_files):
     train_dataset = AmplitudeDatasetDynamic(training_files)
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE)
@@ -362,15 +390,14 @@ with open(TEST_LIST) as to_read:
 
 print("Parameters: " + PARAMS)
 
-"""
 model = AutoEncoder().cuda()
 train(train_list, validation_list)
-torch.save(model.state_dict(), "model-" + PARAMS + "-ReLU")
+torch.save(model.state_dict(), "model-" + PARAMS)
 
 device = torch.device("cpu")
 model = AutoEncoder()
-model.load_state_dict(torch.load("model-" + PARAMS + "-ReLU", map_location=device))
+model.load_state_dict(torch.load("model-" + PARAMS, map_location=device))
 
 batch_process(test_list)
 batch_peaq(test_list, "output")
-"""
+plot_peaq()
