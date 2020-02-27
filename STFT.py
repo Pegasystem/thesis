@@ -22,8 +22,10 @@ TEST_LIST = "test.txt." + str(DATASET)
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 NPERSEG = 2048          # amount of samples in a single segment - requires converting files again if changed
 
-BATCH_SIZE = 512
-EPOCHS = 400
+model = None
+
+BATCH_SIZE = 256
+EPOCHS = 175
 NUM_WORKERS = 8         # amount of available CPU threads
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-5
@@ -209,6 +211,7 @@ def plot_peaq(show):
     peaq_192 = numpy.load("peaq-192.npz")["results"]
     peaq_320 = numpy.load("peaq-320.npz")["results"]
     peaq_output = numpy.load("peaq-output.npz")["results"]
+    numpy.savez("peaq-" + PARAMS, results=peaq_output)
 
     data = [peaq_128, peaq_192, peaq_320, peaq_output]
     figure, axis = plot.subplots()
@@ -235,6 +238,49 @@ def plot_loss(filename, epochs, show):
         plot.show()
     else:
         plot.savefig("loss-" + PARAMS + ".png")
+
+
+def read_file_lists():
+    train_list = []
+    with open(TRAIN_LIST) as to_read:
+        for line in to_read:
+            line = line[:-1]
+            train_list.append(line)
+
+    validation_list = []
+    with open(VALIDATION_LIST) as to_read:
+        for line in to_read:
+            line = line[:-1]
+            validation_list.append(line)
+
+    test_list = []
+    with open(TEST_LIST) as to_read:
+        for line in to_read:
+            line = line[:-1]
+            test_list.append(line)
+
+    return train_list, validation_list, test_list
+
+
+def train_model(train_list, validation_list):
+    global model
+
+    model = AutoEncoder().cuda()
+    train(train_list, validation_list)
+    torch.save(model.state_dict(), "model-" + PARAMS)
+    plot_loss("loss-" + PARAMS + ".npz", EPOCHS, False)
+
+
+def test_model(test_list):
+    global model
+
+    device = torch.device("cpu")
+    model = AutoEncoder()
+    model.load_state_dict(torch.load("model-" + PARAMS, map_location=device))
+
+    batch_process(test_list)
+    batch_peaq(test_list, "output")
+    plot_peaq(False)
 
 
 def train(training_files, validation_files):
@@ -381,35 +427,7 @@ class AutoEncoder(nn.Module):
         return x
 
 
-train_list = []
-with open(TRAIN_LIST) as to_read:
-    for line in to_read:
-        line = line[:-1]
-        train_list.append(line)
-
-validation_list = []
-with open(VALIDATION_LIST) as to_read:
-    for line in to_read:
-        line = line[:-1]
-        validation_list.append(line)
-
-test_list = []
-with open(TEST_LIST) as to_read:
-    for line in to_read:
-        line = line[:-1]
-        test_list.append(line)
-
 print("Parameters: " + PARAMS)
-
-model = AutoEncoder().cuda()
-train(train_list, validation_list)
-torch.save(model.state_dict(), "model-" + PARAMS)
-plot_loss("loss-" + PARAMS + ".npz", EPOCHS, False)
-
-device = torch.device("cpu")
-model = AutoEncoder()
-model.load_state_dict(torch.load("model-" + PARAMS, map_location=device))
-
-batch_process(test_list)
-batch_peaq(test_list, "output")
-plot_peaq(False)
+training, validation, test = read_file_lists()
+train_model(training, validation)
+test_model(test)
