@@ -22,8 +22,8 @@ TEST_LIST = "test.txt." + str(DATASET)
 SAMPLE_RATE = 44100     # sample rate of all files, has to be the same
 NPERSEG = 2048          # amount of samples in a single segment - requires converting files again if changed
 
-BATCH_SIZE = 128
-EPOCHS = 50
+BATCH_SIZE = 512
+EPOCHS = 400
 NUM_WORKERS = 8         # amount of available CPU threads
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-5
@@ -204,7 +204,7 @@ def process_file(filename, write_to):
     print("File successfully processed, written to " + write_to + ".")
 
 
-def plot_peaq():
+def plot_peaq(show):
     peaq_128 = numpy.load("peaq-128.npz")["results"]
     peaq_192 = numpy.load("peaq-192.npz")["results"]
     peaq_320 = numpy.load("peaq-320.npz")["results"]
@@ -216,10 +216,13 @@ def plot_peaq():
     axis.boxplot(data)
     plot.xticks([1, 2, 3, 4], ["128kbps", "192kbps", "320kbps", "NN output"])
 
-    plot.show()
+    if show:
+        plot.show()
+    else:
+        plot.savefig("peaq-" + PARAMS + ".png")
 
 
-def plot_loss(filename, epochs):
+def plot_loss(filename, epochs, show):
     loss = numpy.load(filename)
     train_loss = loss["train_loss"]
     val_loss = loss["val_loss"]
@@ -228,7 +231,10 @@ def plot_loss(filename, epochs):
     plot.plot(epochs, train_loss)
     plot.plot(epochs, val_loss)
 
-    plot.show()
+    if show:
+        plot.show()
+    else:
+        plot.savefig("loss-" + PARAMS + ".png")
 
 
 def train(training_files, validation_files):
@@ -241,6 +247,7 @@ def train(training_files, validation_files):
 
     print("Starting training...")
     total_time = 0
+    epoch_counter = 0
     train_losses = []
     validation_losses = []
     for epoch in range(EPOCHS):
@@ -275,6 +282,10 @@ def train(training_files, validation_files):
         estimate = str(datetime.timedelta(seconds=round((total_time / (epoch + 1)) * (EPOCHS - epoch + 1))))
         print("epoch [{}/{}], loss: {:.4f}, val. loss: {:.4f}, time: {:.2f}s, est. time: {}"
               .format(epoch + 1, EPOCHS, train_loss, validation_loss, end, estimate))
+        epoch_counter += 1
+        if epoch_counter % 25 == 0:
+            epoch_counter = 0
+            torch.save(model.state_dict(), "epoch" + str(epoch + 1) + "-model")
     print("Writing losses to file...\n")
     numpy.savez("loss-" + PARAMS, train_loss=train_losses, val_loss=validation_losses)
 
@@ -393,6 +404,7 @@ print("Parameters: " + PARAMS)
 model = AutoEncoder().cuda()
 train(train_list, validation_list)
 torch.save(model.state_dict(), "model-" + PARAMS)
+plot_loss("loss-" + PARAMS + ".npz", EPOCHS, False)
 
 device = torch.device("cpu")
 model = AutoEncoder()
@@ -400,4 +412,4 @@ model.load_state_dict(torch.load("model-" + PARAMS, map_location=device))
 
 batch_process(test_list)
 batch_peaq(test_list, "output")
-plot_peaq()
+plot_peaq(False)
