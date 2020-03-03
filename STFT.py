@@ -12,7 +12,7 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 import subprocess
 
-DATASET = 83
+DATASET = "83"
 
 # File lists should contain a filename (or path to a file) on every line.
 TRAIN_LIST = "files.txt." + str(DATASET)
@@ -24,8 +24,8 @@ NPERSEG = 2048          # amount of samples in a single segment - requires conve
 
 model = None
 
-BATCH_SIZE = 256
-EPOCHS = 175
+BATCH_SIZE = 1024
+EPOCHS = 50
 NUM_WORKERS = 8         # amount of available CPU threads
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-5
@@ -168,10 +168,10 @@ def peaq(original, to_compare):
     return float(output[3])
 
 
-def batch_process(filenames):
+def batch_process(filenames, to_replace):
     tuples = []
     for filename in filenames:
-        tuples.append((filename, filename.replace("orig", "output")))
+        tuples.append((filename, filename.replace("orig", to_replace)))
     pool = Pool(NUM_WORKERS)
     pool.starmap(process_file, tuples)
     pool.close()
@@ -210,14 +210,14 @@ def plot_peaq(show):
     peaq_128 = numpy.load("peaq-128.npz")["results"]
     peaq_192 = numpy.load("peaq-192.npz")["results"]
     peaq_320 = numpy.load("peaq-320.npz")["results"]
-    peaq_output = numpy.load("peaq-output.npz")["results"]
-    numpy.savez("peaq-" + PARAMS, results=peaq_output)
+    peaq_orig = numpy.load("peaq-orig-output.npz")["results"]
+    peaq_128nn = numpy.load("peaq-128-output.npz")["results"]
 
-    data = [peaq_128, peaq_192, peaq_320, peaq_output]
+    data = [peaq_128, peaq_192, peaq_320, peaq_orig, peaq_128nn]
     figure, axis = plot.subplots()
     axis.set_title("PEAQ results - " + PARAMS)
     axis.boxplot(data)
-    plot.xticks([1, 2, 3, 4], ["128kbps", "192kbps", "320kbps", "NN output"])
+    plot.xticks([1, 2, 3, 4, 5], ["128kbps", "192kbps", "320kbps", "NN original", "NN 128kbps"])
 
     if show:
         plot.show()
@@ -278,8 +278,10 @@ def test_model(test_list):
     model = AutoEncoder()
     model.load_state_dict(torch.load("model-" + PARAMS, map_location=device))
 
-    batch_process(test_list)
-    batch_peaq(test_list, "output")
+    batch_process(test_list, "orig-output")
+    batch_process(test_list, "128-output")
+    batch_peaq(test_list, "orig-output")
+    batch_peaq(test_list, "128-output")
     plot_peaq(False)
 
 
@@ -340,9 +342,6 @@ class AmplitudeDatasetDynamic(Dataset):
     def calculate_length(self, filename):
         self.temp.append(len(stft_from_file(filename)))
 
-    def get_stft(self, filename):
-        self.temp.append(stft_from_file(filename))
-
     def __init__(self, filenames):
         # filenames = array with filenames
         # self.length = dataset length
@@ -355,7 +354,6 @@ class AmplitudeDatasetDynamic(Dataset):
         self.filenames = filenames
         self.filenames_temp = self.filenames.copy()
         self.amps = []
-        self.stft = []
 
         pool = Pool(NUM_WORKERS)
         pool.map(self.calculate_length, filenames)
@@ -373,23 +371,8 @@ class AmplitudeDatasetDynamic(Dataset):
             if len(self.filenames_temp) == 0:
                 # Start over from the beginning.
                 self.filenames_temp.extend(self.filenames)
-            if len(self.stft) == 0:
-                manager = Manager()
-                self.temp = manager.list()
-                temp = []
-                while len(temp) != NUM_WORKERS and len(self.filenames_temp) != 0:
-                    temp.append(self.filenames_temp.pop())
 
-                pool = Pool(NUM_WORKERS)
-                pool.map(self.get_stft, temp)
-                pool.close()
-
-                self.stft = self.temp[:]
-                current_stft = self.stft.pop()
-            else:
-                current_stft = self.stft.pop()
-
-            self.amps.extend(current_stft)
+            self.amps.extend(stft_from_file(self.filenames_temp.pop()))
             self.amps_reversed = self.amps[::-1]
         # Returns a sample from the currently read file.
         self.amps.pop()
