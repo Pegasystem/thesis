@@ -89,7 +89,8 @@ def to_amplitude(stft_in):
     # Converts the given STFT data to the appropriate amplitudes.
     # Returns the same type of array, with amplitudes instead of complex numbers.
 
-    return numpy.sqrt(numpy.imag(stft_in) ** 2 + numpy.real(stft_in) ** 2)
+    amps = numpy.sqrt(numpy.imag(stft_in) ** 2 + numpy.real(stft_in) ** 2)
+    return numpy.divide(amps, SAMPLE_RATE / 2)
 
 
 def to_phase(stft_in):
@@ -119,7 +120,7 @@ def calculate(amplitudes):
             temp_output = model(temp_data.float())
             new_amps.append(temp_output.detach().numpy()[0])
 
-    return numpy.array(new_amps)
+    return numpy.multiply(numpy.array(new_amps), SAMPLE_RATE / 2)
 
 
 def convert_files(filenames):
@@ -285,6 +286,37 @@ def test_model(test_list):
     plot_peaq(False)
 
 
+def find_lr(training_files):
+    global model
+    model = AutoEncoder().cuda()
+
+    train_dataset = AmplitudeDatasetDynamic(training_files)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0, weight_decay=WEIGHT_DECAY)
+
+    learning_rates = numpy.logspace(-7, -2, num=len(train_dataloader))
+    losses = []
+
+    print("Finding best learning rate...")
+    for lr, data in zip(learning_rates, train_dataloader):
+        for parameter in optimizer.param_groups:
+            parameter['lr'] = lr
+        data = Variable(data).cuda()
+        output = model(data.float())
+        loss = criterion(output, data.float())
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        losses.append(loss.item())
+
+    plot.plot(learning_rates, losses)
+    plot.xscale("log")
+    plot.show()
+
+
 def train(training_files, validation_files):
     train_dataset = AmplitudeDatasetDynamic(training_files)
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE)
@@ -352,7 +384,7 @@ class AmplitudeDatasetDynamic(Dataset):
         manager = Manager()
         self.temp = manager.list()
         self.filenames = filenames
-        self.filenames_temp = self.filenames.copy()
+        self.filenames_temp = self.filenames[:]
         self.amps = []
 
         pool = Pool(NUM_WORKERS)
@@ -372,10 +404,10 @@ class AmplitudeDatasetDynamic(Dataset):
                 # Start over from the beginning.
                 self.filenames_temp.extend(self.filenames)
 
-            self.amps.extend(stft_from_file(self.filenames_temp.pop()))
+            self.amps = stft_from_file(self.filenames_temp.pop())
             self.amps_reversed = self.amps[::-1]
         # Returns a sample from the currently read file.
-        self.amps.pop()
+        self.amps = self.amps[:-1]
         return self.amps_reversed[len(self.amps_reversed) - len(self.amps) - 1]
 
 
@@ -412,5 +444,9 @@ class AutoEncoder(nn.Module):
 
 print("Parameters: " + PARAMS)
 training, validation, test = read_file_lists()
-train_model(training, validation)
-test_model(test)
+# train_model(training, validation)
+# test_model(test)
+
+find_lr(training)
+
+# convert_files(training)
