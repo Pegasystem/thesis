@@ -25,10 +25,12 @@ NPERSEG = 2048          # amount of samples in a single segment - requires conve
 model = None
 
 BATCH_SIZE = 512
-EPOCHS = 50
+EPOCHS = 100
 NUM_WORKERS = 8         # amount of available CPU threads
 LEARNING_RATE = 6e-6
 WEIGHT_DECAY = 1e-5
+
+SMALL = True            # runs all data through log function & exp as reverse to make it smaller
 
 INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)     # because the output of the STFT is of length NPERSEG / 2 + 1
 FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE / 2)
@@ -189,8 +191,9 @@ def process_file(filename, write_to):
     amp_left = to_amplitude(stft_left)
     amp_right = to_amplitude(stft_right)
 
-    amp_left = numpy.log(amp_left, where=amp_left != 0)
-    amp_right = numpy.log(amp_right, where=amp_right != 0)
+    if SMALL:
+        amp_left = numpy.log(amp_left, where=amp_left != 0)
+        amp_right = numpy.log(amp_right, where=amp_right != 0)
 
     phase_left = to_phase(stft_left)
     phase_right = to_phase(stft_right)
@@ -198,8 +201,9 @@ def process_file(filename, write_to):
     new_left = calculate(amp_left)
     new_right = calculate(amp_right)
 
-    new_left = numpy.exp(new_left, where=new_left != 0)
-    new_right = numpy.exp(new_right, where=new_right != 0)
+    if SMALL:
+        new_left = numpy.exp(new_left, where=new_left != 0)
+        new_right = numpy.exp(new_right, where=new_right != 0)
 
     signal_left = to_signal(new_left, phase_left)
     signal_right = to_signal(new_right, phase_right)
@@ -291,7 +295,7 @@ def test_model(test_list):
     plot_peaq(False)
 
 
-def find_lr(training_files):
+def find_lr(training_files, logstart, logend, smooth=True):
     global model
     model = AutoEncoder().cuda()
 
@@ -300,7 +304,7 @@ def find_lr(training_files):
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0, weight_decay=WEIGHT_DECAY)
 
-    learning_rates = numpy.logspace(-7, -2, num=len(train_dataloader))
+    learning_rates = numpy.logspace(logstart, logend, num=len(train_dataloader))
     losses = []
 
     print("Finding best learning rate...")
@@ -317,9 +321,15 @@ def find_lr(training_files):
 
         losses.append(loss.item())
 
-    plot.plot(learning_rates, losses)
     plot.xscale("log")
-    plot.show()
+    if smooth:
+        poly = numpy.polyfit(learning_rates, losses, 10)
+        smooth = numpy.poly1d(poly)(learning_rates)
+        plot.plot(learning_rates, smooth)
+        plot.show()
+    else:
+        plot.plot(learning_rates, losses)
+        plot.show()
 
 
 def train(training_files, validation_files):
@@ -385,6 +395,7 @@ class AmplitudeDatasetDynamic(Dataset):
         # Calculates dataset length.
         print("Calculating dataset length - this might take a while...")
         self.filenames = filenames
+        self.small = small
         self.filenames_temp = self.filenames[:]
         self.amps = []
         self.length = 0
@@ -406,7 +417,10 @@ class AmplitudeDatasetDynamic(Dataset):
                 self.filenames_temp.extend(self.filenames)
 
             current_file = stft_from_file(self.filenames_temp.pop())
-            self.amps = numpy.log(current_file, where=current_file != 0)
+            if SMALL:
+                self.amps = numpy.log(current_file, where=current_file != 0)
+            else:
+                self.amps = current_file
             self.amps_reversed = self.amps[::-1]
         # Returns a sample from the currently read file.
         self.amps = self.amps[:-1]
@@ -446,10 +460,10 @@ class AutoEncoder(nn.Module):
 
 print("Parameters: " + PARAMS)
 training, validation, test = read_file_lists()
-# train_model(training, validation)
-# test_model(test)
+train_model(training, validation)
+test_model(test)
 
-find_lr(training)
+# find_lr(training, -7, -3)
 
 # convert_files(training)
 # convert_files(validation)
