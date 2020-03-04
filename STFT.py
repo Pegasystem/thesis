@@ -25,16 +25,16 @@ NPERSEG = 2048          # amount of samples in a single segment - requires conve
 model = None
 
 BATCH_SIZE = 512
-EPOCHS = 100
+EPOCHS = 400
 NUM_WORKERS = 8         # amount of available CPU threads
-LEARNING_RATE = 6e-6
+LEARNING_RATE = 3e-5
 WEIGHT_DECAY = 1e-5
 
-SMALL = True            # runs all data through log function & exp as reverse to make it smaller
+SMALL = False            # runs all data through log function & exp as reverse to make it smaller
 
 INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)     # because the output of the STFT is of length NPERSEG / 2 + 1
-FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE / 2)
-SECOND_LAYER_SIZE = 256
+FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE * 0.75)
+SECOND_LAYER_SIZE = int(INPUT_LAYER_SIZE * 0.5)
 THIRD_LAYER_SIZE = 128
 
 PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "-epochs" + str(EPOCHS) + \
@@ -295,7 +295,7 @@ def test_model(test_list):
     plot_peaq(False)
 
 
-def find_lr(training_files, logstart, logend, smooth=True):
+def find_lr(training_files, logstart, logend, smooth=False):
     global model
     model = AutoEncoder().cuda()
 
@@ -395,7 +395,6 @@ class AmplitudeDatasetDynamic(Dataset):
         # Calculates dataset length.
         print("Calculating dataset length - this might take a while...")
         self.filenames = filenames
-        self.small = small
         self.filenames_temp = self.filenames[:]
         self.amps = []
         self.length = 0
@@ -442,13 +441,13 @@ class AutoEncoder(nn.Module):
     def __init__(self):
         super(AutoEncoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(INPUT_LAYER_SIZE, FIRST_LAYER_SIZE), nn.ReLU(True)
-            # nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE),
+            nn.Linear(INPUT_LAYER_SIZE, FIRST_LAYER_SIZE), nn.ReLU(True),
+            nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE), nn.ReLU(True)
             # nn.Linear(SECOND_LAYER_SIZE, THIRD_LAYER_SIZE)
         )
         self.decoder = nn.Sequential(
             # nn.Linear(THIRD_LAYER_SIZE, SECOND_LAYER_SIZE),
-            # nn.Linear(SECOND_LAYER_SIZE, FIRST_LAYER_SIZE),
+            nn.Linear(SECOND_LAYER_SIZE, FIRST_LAYER_SIZE), nn.ReLU(True),
             nn.Linear(FIRST_LAYER_SIZE, INPUT_LAYER_SIZE)
         )
 
@@ -463,7 +462,8 @@ training, validation, test = read_file_lists()
 train_model(training, validation)
 test_model(test)
 
-# find_lr(training, -7, -3)
+# find_lr(training, -7, -2)
+# find_lr(training, -7, -2, True)
 
 # convert_files(training)
 # convert_files(validation)
