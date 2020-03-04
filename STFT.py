@@ -1,6 +1,6 @@
 import datetime
 import matplotlib.pyplot as plot
-from multiprocessing import Manager, Pool
+from multiprocessing import Pool
 import numpy
 import os
 from scipy.io import wavfile
@@ -24,10 +24,10 @@ NPERSEG = 2048          # amount of samples in a single segment - requires conve
 
 model = None
 
-BATCH_SIZE = 1024
+BATCH_SIZE = 512
 EPOCHS = 50
 NUM_WORKERS = 8         # amount of available CPU threads
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 6e-6
 WEIGHT_DECAY = 1e-5
 
 INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)     # because the output of the STFT is of length NPERSEG / 2 + 1
@@ -89,8 +89,7 @@ def to_amplitude(stft_in):
     # Converts the given STFT data to the appropriate amplitudes.
     # Returns the same type of array, with amplitudes instead of complex numbers.
 
-    amps = numpy.sqrt(numpy.imag(stft_in) ** 2 + numpy.real(stft_in) ** 2)
-    return numpy.divide(amps, SAMPLE_RATE / 2)
+    return numpy.sqrt(numpy.imag(stft_in) ** 2 + numpy.real(stft_in) ** 2)
 
 
 def to_phase(stft_in):
@@ -120,7 +119,7 @@ def calculate(amplitudes):
             temp_output = model(temp_data.float())
             new_amps.append(temp_output.detach().numpy()[0])
 
-    return numpy.multiply(numpy.array(new_amps), SAMPLE_RATE / 2)
+    return numpy.array(new_amps)
 
 
 def convert_files(filenames):
@@ -173,9 +172,9 @@ def batch_process(filenames, to_replace):
     tuples = []
     for filename in filenames:
         tuples.append((filename, filename.replace("orig", to_replace)))
-    pool = Pool(NUM_WORKERS)
-    pool.starmap(process_file, tuples)
-    pool.close()
+
+    for pair in tuples:
+        process_file(*pair)
 
 
 def process_file(filename, write_to):
@@ -190,11 +189,17 @@ def process_file(filename, write_to):
     amp_left = to_amplitude(stft_left)
     amp_right = to_amplitude(stft_right)
 
+    amp_left = numpy.log(amp_left, where=amp_left != 0)
+    amp_right = numpy.log(amp_right, where=amp_right != 0)
+
     phase_left = to_phase(stft_left)
     phase_right = to_phase(stft_right)
 
     new_left = calculate(amp_left)
     new_right = calculate(amp_right)
+
+    new_left = numpy.exp(new_left, where=new_left != 0)
+    new_right = numpy.exp(new_right, where=new_right != 0)
 
     signal_left = to_signal(new_left, phase_left)
     signal_right = to_signal(new_right, phase_right)
@@ -360,7 +365,7 @@ def train(training_files, validation_files):
         train_losses.append(train_loss)
         validation_losses.append(validation_loss)
         estimate = str(datetime.timedelta(seconds=round((total_time / (epoch + 1)) * (EPOCHS - epoch + 1))))
-        print("epoch [{}/{}], loss: {:.4f}, val. loss: {:.4f}, time: {:.2f}s, est. time: {}"
+        print("epoch [{}/{}], loss: {:.8f}, val. loss: {:.8f}, time: {:.2f}s, est. time: {}"
               .format(epoch + 1, EPOCHS, train_loss, validation_loss, end, estimate))
         epoch_counter += 1
         if epoch_counter % 25 == 0:
@@ -371,8 +376,6 @@ def train(training_files, validation_files):
 
 
 class AmplitudeDatasetDynamic(Dataset):
-    def calculate_length(self, filename):
-        self.temp.append(len(stft_from_file(filename)))
 
     def __init__(self, filenames):
         # filenames = array with filenames
@@ -381,17 +384,15 @@ class AmplitudeDatasetDynamic(Dataset):
         # self.amps = array that contains the currently read file
         # Calculates dataset length.
         print("Calculating dataset length - this might take a while...")
-        manager = Manager()
-        self.temp = manager.list()
         self.filenames = filenames
         self.filenames_temp = self.filenames[:]
         self.amps = []
+        self.length = 0
 
-        pool = Pool(NUM_WORKERS)
-        pool.map(self.calculate_length, filenames)
-        pool.close()
+        for filename in filenames:
+            current_file = stft_from_file(filename)
+            self.length += len(current_file)
 
-        self.length = sum(self.temp)
         print("Finished calculating dataset length, amount of STFTs: " + str(self.length) + ".\n")
 
     def __len__(self):
@@ -404,7 +405,8 @@ class AmplitudeDatasetDynamic(Dataset):
                 # Start over from the beginning.
                 self.filenames_temp.extend(self.filenames)
 
-            self.amps = stft_from_file(self.filenames_temp.pop())
+            current_file = stft_from_file(self.filenames_temp.pop())
+            self.amps = numpy.log(current_file, where=current_file != 0)
             self.amps_reversed = self.amps[::-1]
         # Returns a sample from the currently read file.
         self.amps = self.amps[:-1]
@@ -450,3 +452,6 @@ training, validation, test = read_file_lists()
 find_lr(training)
 
 # convert_files(training)
+# convert_files(validation)
+
+# plot_loss("loss-" + PARAMS + ".npz", EPOCHS, True)
