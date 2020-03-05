@@ -57,25 +57,37 @@ def stft_from_file(filename):
 
 
 def read_file_lists():
-    train_list = []
+    train_output = []
     with open(TRAIN_LIST) as to_read:
         for line in to_read:
             line = line[:-1]
-            train_list.append(line)
+            train_output.append(line)
 
-    validation_list = []
+    train_input = []
+    for filename in train_output:
+        train_input.append(filename.replace("orig", "128"))
+
+    validation_output = []
     with open(VALIDATION_LIST) as to_read:
         for line in to_read:
             line = line[:-1]
-            validation_list.append(line)
+            validation_output.append(line)
 
-    test_list = []
+    validation_input = []
+    for filename in validation_output:
+        validation_input.append(filename.replace("orig", "128"))
+
+    test_orig = []
     with open(TEST_LIST) as to_read:
         for line in to_read:
             line = line[:-1]
-            test_list.append(line)
+            test_orig.append(line)
 
-    return train_list, validation_list, test_list
+    test_128 = []
+    for filename in test_orig:
+        test_128.append(filename.replace("orig", "128"))
+
+    return train_input, train_output, validation_input, validation_output, test_orig, test_128
 
 
 def move_stuff(new_best=False):
@@ -100,7 +112,10 @@ def move_stuff(new_best=False):
 def batch_process(filenames, to_replace):
     tuples = []
     for filename in filenames:
-        tuples.append((filename, filename.replace("orig", to_replace)))
+        if "orig" in filename:
+            tuples.append((filename, filename.replace("orig", to_replace)))
+        if "128" in filename:
+            tuples.append((filename, filename.replace("128", to_replace)))
 
     for pair in tuples:
         process_file(*pair)
@@ -114,7 +129,7 @@ def batch_peaq(filenames, to_replace):
     results = pool.starmap(peaq, tuples)
     pool.close()
 
-    print("Writing results to file...")
+    print("Writing results to peaq-" + to_replace + ".npz...")
     np.savez("peaq-" + to_replace + ".npz", results=results)
 
 
@@ -206,46 +221,6 @@ def plot_loss(filename, show):
 
 
 # ============================================== AI ==============================================
-
-
-def find_lr(training_files, logstart, logend, smooth=False):
-    # noinspection PyGlobalUndefined
-    global model
-    # noinspection PyUnresolvedReferences
-    model = AutoEncoder().cuda()
-
-    train_dataset = AmplitudeDatasetDynamic(training_files)
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE)
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0, weight_decay=WEIGHT_DECAY)
-
-    learning_rates = np.logspace(logstart, logend, num=len(train_dataloader))
-    losses = []
-
-    print("Finding best learning rate...")
-    for lr, data in zip(learning_rates, train_dataloader):
-        for parameter in optimizer.param_groups:
-            parameter['lr'] = lr
-        # noinspection PyArgumentList
-        data = Variable(data).cuda()
-        output = model(data.float())
-        loss = criterion(output, data.float())
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        losses.append(loss.item())
-
-    plot.xscale("log")
-    if smooth:
-        poly = np.polyfit(learning_rates, losses, 10)
-        smooth = np.poly1d(poly)(learning_rates)
-        plot.plot(learning_rates, smooth)
-        plot.show()
-    else:
-        plot.plot(learning_rates, losses)
-        plot.show()
 
 
 def calculate(amplitudes):

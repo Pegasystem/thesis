@@ -7,30 +7,79 @@ from helpers import *
 from parameters import *
 
 
-def train_model(train_list, validation_list):
+def find_lr(training_input, training_output, logstart, logend, smooth=False):
+    # noinspection PyGlobalUndefined
+    global model
+    # noinspection PyUnresolvedReferences
+    model = AutoEncoder().cuda()
+
+    training_input_dataset = AmplitudeDatasetDynamic(training_input)
+    training_input_dataloader = DataLoader(training_input_dataset, batch_size=BATCH_SIZE)
+    training_output_dataset = AmplitudeDatasetDynamic(training_output)
+    training_output_dataloader = DataLoader(training_output_dataset, batch_size=BATCH_SIZE)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0, weight_decay=WEIGHT_DECAY)
+
+    learning_rates = np.logspace(logstart, logend, num=len(training_output_dataloader))
+    losses = []
+
+    print("Finding best learning rate...")
+    for lr, inp, outp in zip(learning_rates, training_input_dataloader, training_output_dataloader):
+        for parameter in optimizer.param_groups:
+            parameter['lr'] = lr
+        # noinspection PyArgumentList
+        inp = Variable(inp).cuda()
+        # noinspection PyArgumentList
+        outp = Variable(outp).cuda()
+
+        model_output = model(inp.float())
+        loss = criterion(model_output, outp.float())
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        losses.append(loss.item())
+
+    plot.xscale("log")
+    if smooth:
+        poly = np.polyfit(learning_rates, losses, 10)
+        smooth = np.poly1d(poly)(learning_rates)
+        plot.plot(learning_rates, smooth)
+        plot.show()
+    else:
+        plot.plot(learning_rates, losses)
+        plot.show()
+
+
+def train_model(train_input, train_output, validation_input, validation_output):
     # noinspection PyGlobalUndefined
     global model
 
     # noinspection PyUnresolvedReferences
     model = AutoEncoder().cuda()
-    train(train_list, validation_list)
+    train(train_input, train_output, validation_input, validation_output)
     plot_loss(os.path.join(DIRECTORY, PARAMS, "epoch" + str(EPOCHS) + "-model"), False)
 
 
-def test_model(test_list):
-    batch_process(test_list, "orig-output")
-    batch_process(test_list, "128-output")
-    batch_peaq(test_list, "orig-output")
-    batch_peaq(test_list, "128-output")
+def test_model(test_orig, test_128):
+    batch_process(test_orig, "orig-output")
+    batch_process(test_128, "128-output")
+    batch_peaq(test_orig, "orig-output")
+    batch_peaq(test_orig, "128-output")
     plot_peaq(False)
     move_stuff()
 
 
-def train(training_files, validation_files):
-    train_dataset = AmplitudeDatasetDynamic(training_files)
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE)
-    validation_dataset = AmplitudeDatasetDynamic(validation_files)
-    validation_dataloader = DataLoader(validation_dataset, batch_size=BATCH_SIZE)
+def train(training_input, training_output, validation_input, validation_output):
+    training_input_dataset = AmplitudeDatasetDynamic(training_input)
+    training_input_dataloader = DataLoader(training_input_dataset, batch_size=BATCH_SIZE)
+    training_output_dataset = AmplitudeDatasetDynamic(training_output)
+    training_output_dataloader = DataLoader(training_output_dataset, batch_size=BATCH_SIZE)
+    validation_input_dataset = AmplitudeDatasetDynamic(validation_input)
+    validation_input_dataloader = DataLoader(validation_input_dataset, batch_size=BATCH_SIZE)
+    validation_output_dataset = AmplitudeDatasetDynamic(validation_output)
+    validation_output_dataloader = DataLoader(validation_output_dataset, batch_size=BATCH_SIZE)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
@@ -49,11 +98,14 @@ def train(training_files, validation_files):
         new_best = False
 
         model.train()
-        for data in train_dataloader:
+        for inp, outp in zip(training_input_dataloader, training_output_dataloader):
             # noinspection PyArgumentList
-            data = Variable(data).cuda()
-            output = model(data.float())
-            loss = criterion(output, data.float())
+            inp = Variable(inp).cuda()
+            # noinspection PyArgumentList
+            outp = Variable(outp).cuda()
+
+            model_output = model(inp.float())
+            loss = criterion(model_output, outp.float())
 
             optimizer.zero_grad()
             loss.backward()
@@ -63,11 +115,14 @@ def train(training_files, validation_files):
 
         model.eval()
         with torch.no_grad():
-            for data in validation_dataloader:
+            for inp, outp in zip(validation_input_dataloader, validation_output_dataloader):
                 # noinspection PyArgumentList
-                data = Variable(data).cuda()
-                output = model(data.float())
-                loss = criterion(output, data.float())
+                inp = Variable(inp).cuda()
+                # noinspection PyArgumentList
+                outp = Variable(outp).cuda()
+
+                model_output = model(inp.float())
+                loss = criterion(model_output, outp.float())
 
                 validation_loss += loss.item()
 
@@ -75,8 +130,8 @@ def train(training_files, validation_files):
         total_time += end
         estimate = str(datetime.timedelta(seconds=round((total_time / (epoch + 1)) * (EPOCHS - epoch + 1))))
 
-        train_loss = train_loss / len(train_dataloader)
-        validation_loss = validation_loss / len(validation_dataloader)
+        train_loss = train_loss / len(training_output_dataloader)
+        validation_loss = validation_loss / len(validation_output_dataloader)
         train_losses.append(train_loss)
         validation_losses.append(validation_loss)
 
@@ -174,12 +229,12 @@ class AutoEncoder(nn.Module):
 
 def main():
     print("Parameters: " + PARAMS)
-    training, validation, test = read_file_lists()
-    train_model(training, validation)
-    test_model(test)
+    train_input, train_output, validation_input, validation_output, test_orig, test_128 = read_file_lists()
+    train_model(train_input, train_output, validation_input, validation_output)
+    test_model(test_orig, test_128)
 
-    # find_lr(training, -7, -2)
-    # find_lr(training, -7, -2, True)
+    # find_lr(train_input, train_output, -7, -2)
+    # find_lr(train_input, train_output, -7, -2, True)
 
     # convert_files(training)
     # convert_files(validation)

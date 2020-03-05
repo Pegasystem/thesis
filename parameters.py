@@ -13,9 +13,9 @@ NPERSEG = 2048  # amount of samples in a single segment - requires converting fi
 model = None
 
 BATCH_SIZE = 512
-EPOCHS = 25
+EPOCHS = 50
 NUM_WORKERS = 8  # amount of available CPU threads
-LEARNING_RATE = 5e-5
+LEARNING_RATE = 3e-5
 WEIGHT_DECAY = 1e-5
 
 SMALL = False  # runs all data through log function & exp as reverse to make it smaller
@@ -26,7 +26,8 @@ SECOND_LAYER_SIZE = int(INPUT_LAYER_SIZE * 0.5)
 THIRD_LAYER_SIZE = 128
 
 PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "-epochs" + str(EPOCHS) + \
-         "-nperseg" + str(NPERSEG) + "-firstlayer" + str(FIRST_LAYER_SIZE) + "-secondlayer" + str(SECOND_LAYER_SIZE)
+         "-nperseg" + str(NPERSEG) + "-firstlayer" + str(FIRST_LAYER_SIZE) + "-secondlayer" + str(SECOND_LAYER_SIZE) + \
+         "-128in"
 
 ENVIRONMENT = os.environ.copy()
 ENVIRONMENT["GST_PLUGIN_PATH"] = "/usr/local/lib/gstreamer-1.0"
