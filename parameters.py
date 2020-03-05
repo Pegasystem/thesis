@@ -30,3 +30,5 @@ PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "
 
 ENVIRONMENT = os.environ.copy()
 ENVIRONMENT["GST_PLUGIN_PATH"] = "/usr/local/lib/gstreamer-1.0"
+
+DIRECTORY = os.getcwd()

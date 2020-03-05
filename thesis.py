@@ -14,26 +14,16 @@ def train_model(train_list, validation_list):
     # noinspection PyUnresolvedReferences
     model = AutoEncoder().cuda()
     train(train_list, validation_list)
-    plot_loss("epoch" + str(EPOCHS) + "-model", False)
+    plot_loss(os.path.join(DIRECTORY, PARAMS, "epoch" + str(EPOCHS) + "-model"), False)
 
 
 def test_model(test_list):
-    global model
-
-    best_model = torch.load("best-model")
-
-    model = AutoEncoder()
-    for key, value in best_model["state-dict"]:
-        best_model["state-dict"][key] = value.cpu()
-    # noinspection PyUnresolvedReferences
-    model.load_state_dict(best_model["state-dict"])
-
     batch_process(test_list, "orig-output")
     batch_process(test_list, "128-output")
     batch_peaq(test_list, "orig-output")
     batch_peaq(test_list, "128-output")
-    move_stuff()
     plot_peaq(False)
+    move_stuff()
 
 
 def train(training_files, validation_files):
@@ -54,9 +44,11 @@ def train(training_files, validation_files):
 
     for epoch in range(EPOCHS):
         start = time.time()
-        model.train()
         train_loss = 0
         validation_loss = 0
+        new_best = False
+
+        model.train()
         for data in train_dataloader:
             # noinspection PyArgumentList
             data = Variable(data).cuda()
@@ -96,15 +88,16 @@ def train(training_files, validation_files):
             state = {"epoch": epoch, "state-dict": model.state_dict(), "optimizer": optimizer.state_dict(),
                      "train-loss": train_losses, "val-loss": validation_losses, "best": best}
             torch.save(state, "best-model")
+            new_best = True
 
         epoch_counter += 1
-        if epoch_counter % 10 == 0:
+        if epoch_counter % 10 == 0 or epoch + 1 == EPOCHS:
             epoch_counter = 0
             state = {"epoch": epoch, "state-dict": model.state_dict(), "optimizer": optimizer.state_dict(),
                      "train-loss": train_losses, "val-loss": validation_losses, "best": best}
             torch.save(state, "epoch" + str(epoch + 1) + "-model")
 
-        move_stuff()
+        move_stuff(new_best)
 
 
 class AmplitudeDatasetDynamic(Dataset):
@@ -191,7 +184,7 @@ def main():
     # convert_files(training)
     # convert_files(validation)
 
-    # plot_loss("loss-" + PARAMS + ".npz", EPOCHS, True)
+    # plot_loss(os.path.join(DIRECTORY, PARAMS, "epoch" + str(EPOCHS) + "-model"), True)
 
 
 if __name__ == '__main__':

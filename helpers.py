@@ -78,14 +78,13 @@ def read_file_lists():
     return train_list, validation_list, test_list
 
 
-def move_stuff():
+def move_stuff(new_best=False):
     # Moves all the model's generated files to a directory of the model's parameters.
-    directory = os.getcwd()
-    new_directory = os.path.join(directory, PARAMS)
+    new_directory = os.path.join(DIRECTORY, PARAMS)
     if not os.path.exists(new_directory):
         os.makedirs(new_directory)
 
-    files = os.listdir(directory)
+    files = os.listdir(DIRECTORY)
     for file in files:
         if file.startswith("epoch"):
             shutil.move(file, new_directory)
@@ -93,6 +92,9 @@ def move_stuff():
             shutil.move(file, new_directory)
         if file.endswith(".png"):
             shutil.move(file, new_directory)
+        if new_best:
+            if file == "best-model":
+                shutil.copy(file, new_directory)
 
 
 def batch_process(filenames, to_replace):
@@ -185,14 +187,14 @@ def plot_peaq(show):
     if show:
         plot.show()
     else:
-        plot.savefig("peaq-" + PARAMS + ".png")
+        plot.savefig("peaq.png", dpi=500)
 
 
 def plot_loss(filename, show):
     loss = torch.load(filename)
     train_loss = loss["train-loss"]
     val_loss = loss["val-loss"]
-    epochs = list(range(1, loss["epoch"] + 1))
+    epochs = list(range(0, loss["epoch"] + 1))
 
     plot.plot(epochs, train_loss)
     plot.plot(epochs, val_loss)
@@ -200,7 +202,7 @@ def plot_loss(filename, show):
     if show:
         plot.show()
     else:
-        plot.savefig("loss-" + str(loss["epoch"] + 1) + ".png")
+        plot.savefig("loss-" + str(loss["epoch"] + 1) + ".png", dpi=500)
 
 
 # ============================================== AI ==============================================
@@ -248,17 +250,24 @@ def find_lr(training_files, logstart, logend, smooth=False):
 
 def calculate(amplitudes):
     # Calculate the new amplitudes using the model - does not support CUDA.
+    global model
+
     temp_dataset = SingularAmplitudeDataset(amplitudes)
     temp_dataloader = DataLoader(temp_dataset)
 
+    model = AutoEncoder()
+    # noinspection PyUnresolvedReferences
+    model.load_state_dict(torch.load("best-model", map_location=torch.device("cpu"))["state-dict"])
+
     new_amps = []
+    # noinspection PyUnresolvedReferences
     model.eval()
     with torch.no_grad():
         for temp_data in temp_dataloader:
             # noinspection PyArgumentList
             temp_data = Variable(temp_data)
             temp_output = model(temp_data.float())
-            new_amps.append(temp_output.detach().np()[0])
+            new_amps.append(temp_output.detach().numpy()[0])
 
     return np.array(new_amps)
 
@@ -288,6 +297,9 @@ def process_file(filename, write_to):
     if SMALL:
         new_left = np.exp(new_left, where=new_left != 0)
         new_right = np.exp(new_right, where=new_right != 0)
+
+    new_left = np.maximum(new_left, amp_left)
+    new_right = np.maximum(new_right, amp_right)
 
     signal_left = to_signal(new_left, phase_left)
     signal_right = to_signal(new_right, phase_right)
