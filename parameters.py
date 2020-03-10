@@ -8,12 +8,12 @@ VALIDATION_LIST = "validation.txt." + str(DATASET)
 TEST_LIST = "test.txt." + str(DATASET)
 
 SAMPLE_RATE = 44100  # sample rate of all files, has to be the same
-NPERSEG = 2048  # amount of samples in a single segment - requires converting files again if changed
+NPERSEG = 4096  # amount of samples in a single segment - requires converting files again if changed
 
 model = None
 
 BATCH_SIZE = 512
-EPOCHS = 50
+EPOCHS = 200
 NUM_WORKERS = 8  # amount of available CPU threads
 LEARNING_RATE = 3e-5
 WEIGHT_DECAY = 1e-5
@@ -21,13 +21,13 @@ WEIGHT_DECAY = 1e-5
 SMALL = False  # runs all data through log function & exp as reverse to make it smaller
 
 INPUT_LAYER_SIZE = int(NPERSEG / 2 + 1)  # because the output of the STFT is of length NPERSEG / 2 + 1
-FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE * 0.75)
-SECOND_LAYER_SIZE = int(INPUT_LAYER_SIZE * 0.5)
-THIRD_LAYER_SIZE = 128
+FIRST_LAYER_SIZE = int(INPUT_LAYER_SIZE * 1.25)
+SECOND_LAYER_SIZE = int(INPUT_LAYER_SIZE * 1.5)
+THIRD_LAYER_SIZE = int(INPUT_LAYER_SIZE * 0.5)
 
 PARAMS = str(DATASET) + "-bs" + str(BATCH_SIZE) + "-lr" + str(LEARNING_RATE) + "-epochs" + str(EPOCHS) + \
          "-nperseg" + str(NPERSEG) + "-firstlayer" + str(FIRST_LAYER_SIZE) + "-secondlayer" + str(SECOND_LAYER_SIZE) + \
-         "-128in"
+         "-small" + str(SMALL) + "-128in"
 
 ENVIRONMENT = os.environ.copy()
 ENVIRONMENT["GST_PLUGIN_PATH"] = "/usr/local/lib/gstreamer-1.0"

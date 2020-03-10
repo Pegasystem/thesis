@@ -71,7 +71,7 @@ def test_model(test_orig, test_128):
     move_stuff()
 
 
-def train(training_input, training_output, validation_input, validation_output):
+def train(training_input, training_output, validation_input, validation_output, checkpoint=False):
     training_input_dataset = AmplitudeDatasetDynamic(training_input)
     training_input_dataloader = DataLoader(training_input_dataset, batch_size=BATCH_SIZE)
     training_output_dataset = AmplitudeDatasetDynamic(training_output)
@@ -87,11 +87,24 @@ def train(training_input, training_output, validation_input, validation_output):
 
     total_time = 0
     epoch_counter = 0
+    start = 0
     train_losses = []
     validation_losses = []
     best = {"loss": 1e1000}
 
-    for epoch in range(EPOCHS):
+    if checkpoint:
+        to_load = os.path.join(DIRECTORY, PARAMS, "best-model")
+        checkpoint_state = torch.load(to_load)
+        start = checkpoint_state["epoch"]
+        print("Starting from checkpoint at epoch " + str(start) + "...")
+        model.load_state_dict(checkpoint_state["state-dict"])
+        optimizer.load_state_dict(checkpoint_state["optimizer"])
+        train_losses = checkpoint_state["train-loss"]
+        validation_losses = checkpoint_state["val-loss"]
+        best = checkpoint_state["best"]
+        print("Checkpoint successfully loaded.\n")
+
+    for epoch in range(start=start, stop=EPOCHS):
         start = time.time()
         train_loss = 0
         validation_loss = 0
@@ -146,7 +159,7 @@ def train(training_input, training_output, validation_input, validation_output):
             new_best = True
 
         epoch_counter += 1
-        if epoch_counter % 10 == 0 or epoch + 1 == EPOCHS:
+        if epoch_counter % 25 == 0 or epoch + 1 == EPOCHS:
             epoch_counter = 0
             state = {"epoch": epoch, "state-dict": model.state_dict(), "optimizer": optimizer.state_dict(),
                      "train-loss": train_losses, "val-loss": validation_losses, "best": best}
@@ -187,7 +200,7 @@ class AmplitudeDatasetDynamic(Dataset):
 
             current_file = stft_from_file(self.filenames_temp.pop())
             if SMALL:
-                self.amps = np.log(current_file, where=current_file != 0)
+                self.amps = np.log(current_file + 1)
             else:
                 self.amps = current_file
             self.amps_reversed = self.amps[::-1]
@@ -212,11 +225,11 @@ class AutoEncoder(nn.Module):
         super(AutoEncoder, self).__init__()
         self.encoder = nn.Sequential(
             nn.Linear(INPUT_LAYER_SIZE, FIRST_LAYER_SIZE), nn.ReLU(True),
-            nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE), nn.ReLU(True)
-            # nn.Linear(SECOND_LAYER_SIZE, THIRD_LAYER_SIZE)
+            nn.Linear(FIRST_LAYER_SIZE, SECOND_LAYER_SIZE), nn.ReLU(True),
+            # nn.Linear(SECOND_LAYER_SIZE, THIRD_LAYER_SIZE), nn.ReLU(True)
         )
         self.decoder = nn.Sequential(
-            # nn.Linear(THIRD_LAYER_SIZE, SECOND_LAYER_SIZE),
+            # nn.Linear(THIRD_LAYER_SIZE, SECOND_LAYER_SIZE), nn.ReLU(True),
             nn.Linear(SECOND_LAYER_SIZE, FIRST_LAYER_SIZE), nn.ReLU(True),
             nn.Linear(FIRST_LAYER_SIZE, INPUT_LAYER_SIZE)
         )
@@ -236,8 +249,10 @@ def main():
     # find_lr(train_input, train_output, -7, -2)
     # find_lr(train_input, train_output, -7, -2, True)
 
-    # convert_files(training)
-    # convert_files(validation)
+    # convert_files(train_input)
+    # convert_files(train_output)
+    # convert_files(validation_input)
+    # convert_files(validation_output)
 
     # plot_loss(os.path.join(DIRECTORY, PARAMS, "epoch" + str(EPOCHS) + "-model"), True)
 

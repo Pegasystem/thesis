@@ -260,8 +260,8 @@ def process_file(filename, write_to):
     amp_right = to_amplitude(stft_right)
 
     if SMALL:
-        amp_left = np.log(amp_left, where=amp_left != 0)
-        amp_right = np.log(amp_right, where=amp_right != 0)
+        amp_left = np.log(amp_left + 1)
+        amp_right = np.log(amp_right + 1)
 
     phase_left = to_phase(stft_left)
     phase_right = to_phase(stft_right)
@@ -270,8 +270,8 @@ def process_file(filename, write_to):
     new_right = calculate(amp_right)
 
     if SMALL:
-        new_left = np.exp(new_left, where=new_left != 0)
-        new_right = np.exp(new_right, where=new_right != 0)
+        new_left = np.exp(new_left) - 1
+        new_right = np.exp(new_right) - 1
 
     new_left = np.maximum(new_left, amp_left)
     new_right = np.maximum(new_right, amp_right)
